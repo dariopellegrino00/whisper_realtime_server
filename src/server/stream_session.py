@@ -65,12 +65,16 @@ class WhispStreamSession(StreamSession):
     async def request_enqueuer(self, request_iterator):
         try:
             async for audio_chunk in request_iterator:
-                await self.processor_manager.audio_queue.put(audio_chunk.samples)
+                audio_samples = np.frombuffer(audio_chunk.audio_bytes, dtype=np.float32)
+                await self.processor_manager.audio_queue.put(audio_samples)
         except Exception as e:
             self.processor_manager.logger.error(f"Exception in request_enqueuer {self.processor_manager.id}: {e}")
 
-    async def manage_first_message(self, first_request):
-        await self.processor_manager.insert_audio(first_request.samples)
+    # this method is called to handle the first message of the stream session.
+    # purpose is allow the session to handle eventual configuration messages in the future. with easier extensibility for more session types.
+    async def manage_first_message(self, first_request): 
+        audio_samples = np.frombuffer(first_request.audio_bytes, dtype=np.float32)
+        await self.processor_manager.insert_audio(audio_samples) 
 
 class StandardWhispStreamSession(WhispStreamSession):
     """

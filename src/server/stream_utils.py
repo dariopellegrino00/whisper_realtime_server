@@ -3,6 +3,7 @@ import sys
 import logging
 import asyncio
 import numpy as np
+from typing import Iterable, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 from src.parallel_whisper_online import ParallelOnlineASRProcessor
@@ -55,13 +56,13 @@ class ProcessorManager:
         self.audio_queue = asyncio.Queue()
         self._shared_asr = shared_asr 
 
-    async def insert_audio(self, already_collected_chunks=None):
+    async def insert_audio(self, already_collected_chunks: Optional[Iterable[float]] = None):
         """
         Insert the audio chunks collected by the async audio_queue into the processor.
         If a chunk was already collected, it will be inserted into the processor.
         """
         audio_batch = []
-        if already_collected_chunks:
+        if already_collected_chunks is not None:
             audio_batch.extend(already_collected_chunks)
 
         while not self.audio_queue.empty():

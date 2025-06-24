@@ -7,7 +7,7 @@ option go_package = "example.com/speechpb;speechpb";
 
 // (float array) 
 message AudioChunk {
-  repeated float samples = 1;
+  bytes audio_bytes = 1;
   // timestamp can be used to align the audio chunks and testing
 }
 

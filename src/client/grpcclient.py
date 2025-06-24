@@ -17,8 +17,7 @@ class AudioConfig:
     sample_rate = 16000  # Whisper wants 16 kHz
     chunk_duration = 1.0  # seconds
     channels = 1
-    sample_format = np.int16  # 16-bit PCM
-    max_abs_value = np.iinfo(sample_format).max  # 32767
+    sample_format = np.float32
 
     @classmethod
     def chunk_size(cls):
@@ -29,13 +28,9 @@ class AudioConfig:
         "same as chunk_size()"
         return int(cls.chunk_duration * cls.sample_rate)
 
-    @classmethod
-    def chunk_bytes(cls):
-        return cls.chunk_samples() * np.dtype(cls.sample_format).itemsize
-
 # gRPC client for transcription
 class TranscriptorClient:
-    def __init__(self, host: str, port: int, with_hypothesis: bool = False, simulate_filepath: str = None, interactive: bool = False):
+    def __init__(self, host: str, port: int, with_hypothesis: bool = False, simulate_filepath: str = "", interactive: bool = False):
         self.host = host
         self.port = port
         self.with_hypothesis = with_hypothesis
@@ -44,31 +39,42 @@ class TranscriptorClient:
 
     def __generate_audio_chunks_sim(self):
         # Simulation mode: load audio file (using librosa)
-        audio_data, sr = librosa.load(self.simulate_filepath, sr=AudioConfig.sample_rate, mono=True)
+        audio_data, sr = librosa.load(self.simulate_filepath, sr=AudioConfig.sample_rate, mono=True, dtype=AudioConfig.sample_format)
         total_samples = len(audio_data)
         print(f"Loaded {total_samples} samples from file {self.simulate_filepath}")
         # Split into 1-second chunks
         for i in range(0, total_samples, AudioConfig.chunk_size()):
-            chunk = audio_data[i:i+AudioConfig.chunk_size()]
+            chunk_samples = audio_data[i:i+AudioConfig.chunk_size()]
             #if len(chunk) < AudioConfig.chunk_size() and len(audio_data) - i+AudioConfig.chunk_size():
                 # Skip incomplete last chunk
                 #break
-            yield speech_pb2.AudioChunk(samples=chunk.tolist())
+            yield speech_pb2.AudioChunk(audio_bytes=chunk_samples.tobytes())
             # Simulate real-time sending
             time.sleep(AudioConfig.chunk_duration)
 
     def __generate_audio_chunks_live(self):
-        # Live mode: use the microphone
         print("Capturing real-time audio from the microphone...")
+
+        device_info = sd.query_devices(sd.default.device[0])
+        fs_native = int(device_info["default_samplerate"]) # Native sample rate of the device
+        print(f"Mic sample rate: {fs_native} Hz")
+
+        chunk_samples_native = int(AudioConfig.chunk_duration * fs_native)
         with sd.InputStream(channels=AudioConfig.channels,
-                            samplerate=AudioConfig.sample_rate,
-                            blocksize=AudioConfig.chunk_size()) as stream:
+                            samplerate=fs_native,
+                            blocksize=chunk_samples_native,
+                            dtype=AudioConfig.sample_format) as stream:
+
             while True:
-                # Read a chunk from the microphone (returns a tuple (data, overflow_flag))
-                audio_data, _ = stream.read(AudioConfig.chunk_size())
-                # Flatten the array (assuming mono audio)
-                chunk_samples = audio_data.flatten()
-                yield speech_pb2.AudioChunk(samples=chunk_samples.tolist())
+                audio_data, _ = stream.read(chunk_samples_native)
+                chunk = audio_data.flatten()
+
+                chunk_resampled = librosa.resample( # Resample to the target sample rate, (librosa is slow maybe use scipy.signal.resample in the future)
+                    chunk, orig_sr=fs_native, target_sr=AudioConfig.sample_rate
+                )
+
+                yield speech_pb2.AudioChunk(audio_bytes=np.array(chunk_resampled, dtype=np.float32).tobytes())
+
                 time.sleep(AudioConfig.chunk_duration)
 
     def generate_audio_chunks(self):
@@ -189,8 +195,10 @@ def main():
     parser.add_argument('--interactive', action='store_true',
                         help='Display transcript updates interactively on a single line')
     parser.add_argument('--chunk-duration', type=float, default=1.0)
+    parser.add_argument('--sound-device-id', type=int, default=None, help='ID of the sound device to use for live audio capture. If not specified, the default device will be used. Use this option to select a specific device if you have multiple audio input devices or sounddevice is using the wrong one.')
     args = parser.parse_args()
     AudioConfig.chunk_duration = args.chunk_duration
+    sd.default.device = args.sound_device_id if args.sound_device_id is not None else sd.default.device
 
     client = TranscriptorClient(host=args.host, port=args.port, with_hypothesis=args.with_hypothesis, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
