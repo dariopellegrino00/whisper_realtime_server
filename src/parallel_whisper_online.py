@@ -150,6 +150,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15) # seconds to trim the buffer
         self._result = None
         self._hypothesis = None
+        self.timed_out = False
 
     @property
     def buffer_time_seconds(self):
@@ -209,10 +210,13 @@ from dataclasses import dataclass
 
 @dataclass
 class RegisteredProcess():
-    """Store data used to progress the ParallalASRProcess in parallel
+    """Store data used to progress the ParallalASRProcess in parallel.
+    Contains the ASR processor, a flag to indicate if the processor has committed new audio and is ready to be processed,
+    and a flag to indicate if the processor has never committed audio to have a chance to be processed next time.
     """
-    asr_processor : ParallelOnlineASRProcessor 
+    asr_processor : ParallelOnlineASRProcessor
     ready_flag : bool = False
+    never_commited_flag : bool = True
 
 class ParallelRealtimeASR:
     def __init__(self, modelsize="large-v3-turbo", logger=None, warmup_file=None):
@@ -226,6 +230,7 @@ class ParallelRealtimeASR:
         self._loop_task = None
         self._last_transcript_time_seconds = 0.0  # last transcription time
         self._transcript_timeout_seconds = 2.0  # default timeout for transcription
+        self._timed_out = False
 
         if warmup_file:
             self._asr.warmup(warmup_file)
@@ -265,10 +270,11 @@ class ParallelRealtimeASR:
 
     async def wait(self):
         try:
-            timeout = max(self._transcript_timeout_seconds, len(self._registered_pids)*0.15)  
+            timeout = max(self._transcript_timeout_seconds, len(self._registered_pids) * 0.15)
             await asyncio.wait_for(self._transcription_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            self._logger.error("Timeout waiting for transcription")
+            self._timed_out = True
+            await asyncio.sleep(0.001)  # yield control to the asr loop
 
     async def _all_pid_ready(self):
         async with self._register_lock:
@@ -278,6 +284,20 @@ class ParallelRealtimeASR:
         async with self._register_lock:
             for pid in self._registered_pids:
                 self._registered_pids[pid].ready_flag = False
+                self._registered_pids[pid].never_commited_flag = False
+
+    async def _exclude_timed_out_processors(self):
+        async with self._register_lock:
+            to_remove = [pid for pid, proc in self._registered_pids.items() if not proc.ready_flag]
+            for pid in to_remove:
+                rp = self._registered_pids[pid]
+                if rp.never_commited_flag:
+                    self._logger.info(f"Processor {pid} is new and not ready, giving grace period.")
+                    rp.never_commited_flag = False
+                else:
+                    self._logger.warning(f"Processor {pid} timed out and will be excluded.")
+                    rp.asr_processor.timed_out = True
+                    self._registered_pids.pop(pid)
 
     async def _asr_loop(self):
         self._logger.info("ASR loop started")
@@ -288,9 +308,14 @@ class ParallelRealtimeASR:
                 self._transcription_event.clear()
 
                 if not await self._all_pid_ready():
-                    await asyncio.sleep(0.001)
-                    continue
+                    if self._timed_out:
+                        self._logger.error("Timeout waiting for transcription")
+                        await self._exclude_timed_out_processors()
+                    else:
+                        await asyncio.sleep(0.001)
+                        continue
 
+                self._timed_out = False
                 await self._reset_ready_pids()
                 waiting_time = time.time() - timestamp
                 self._logger.debug(f"Time lost waiting {waiting_time} seconds")
@@ -315,7 +340,7 @@ class ParallelRealtimeASR:
                 self._transcription_event.set()
                 last_transcription_time_seconds = self._last_transcript_time_seconds
                 self._last_transcript_time_seconds = time.time() - timestamp
-                self._transcript_timeout_seconds = last_transcription_time_seconds*0.8 + self._last_transcript_time_seconds + waiting_time # 80% of the last transcription time 
+                self._transcript_timeout_seconds = last_transcription_time_seconds*0.7 + self._last_transcript_time_seconds
 
                 timestamp = time.time()
 

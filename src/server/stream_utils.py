@@ -32,13 +32,14 @@ class TranscriptionManager:
     def __init__(self):
         self.last_end = None
 
-    def format_transcript(self, t):
+    def format_transcript(self, t, use_last_end=True):
         if t and t[0] is not None: # what if t is null
             beg, end = t[0]*1000, t[1]*1000
             if self.last_end is not None:
                 beg = max(beg, self.last_end)
             if beg < 0: beg = 0
-            self.last_end = end
+            if use_last_end:
+                self.last_end = end
             return True, (int(round(beg)), int(round(end)), t[2])
         else:
             return False, (0, 0, "")
@@ -95,4 +96,8 @@ class ProcessorManager:
         finally:
             await self._shared_asr.unregister_processor(self.id)
             self.server_logger.debug(f"{self.id} finished processing")
+
+    def is_finished(self):
+        """Check if the processor has been excluded (e.g. timed out)."""
+        return self.processor.timed_out
 
