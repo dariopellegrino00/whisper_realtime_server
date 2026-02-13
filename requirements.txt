@@ -3,7 +3,7 @@ librosa==0.11.0
 rapidfuzz==3.13.0
 soundfile==0.13.1
 sounddevice==0.5.1
-protobuf==5.29.4
+protobuf==5.29.6
 grpcio==1.71.0
 grpcio-tools==1.71.0
 
