@@ -213,21 +213,23 @@ class TestFallbackLogic:
         """No commits for threshold+1 flushes triggers fallback."""
         buf = HypothesisBuffer(use_fallback=True, fallback_threshold=2)
 
-        # The populate pass also enters fallback logic (buffer empty → no commits),
-        # so unconfirmed_amount increments from the very first flush.
-        # populate: empty buffer → unconfirmed 0 → 1
+        # Populate pass: empty buffer, skipped by fallback logic (no counting).
         buf.insert(make_words(["hello", "world", "test", "data"]), offset=0)
+        buf.flush()
+        assert buf.unconfirmed_amount == 0
+
+        # pass 1 (first real comparison): no match, unconfirmed 0 → 1
+        buf.insert(make_words(["alpha", "beta", "gamma", "delta"]), offset=0)
         buf.flush()
         assert buf.unconfirmed_amount == 1
 
-        # Use unique non-matching words each pass to prevent normal matching.
-        # pass 1: unconfirmed 1 < 2, +1 → 2
-        buf.insert(make_words(["alpha", "beta", "gamma", "delta"]), offset=0)
+        # pass 2: no match, unconfirmed 1 → 2
+        buf.insert(make_words(["one", "two", "three", "four"]), offset=0)
         buf.flush()
         assert buf.unconfirmed_amount == 2
 
-        # pass 2: unconfirmed 2 >= 2 → fallback triggers → reset to 0
-        buf.insert(make_words(["one", "two", "three", "four"]), offset=0)
+        # pass 3: unconfirmed 2 >= 2 → fallback triggers → reset to 0
+        buf.insert(make_words(["red", "green", "blue", "pink"]), offset=0)
         buf.flush()
         assert buf.unconfirmed_amount == 0
 
@@ -240,23 +242,22 @@ class TestFallbackLogic:
         """
         buf = HypothesisBuffer(use_fallback=True, fallback_threshold=1, qratio_threshold=95)
 
-        # First pass: populate buffer with "hello world"
+        # Populate pass: fills buffer, unconfirmed stays 0
         buf.insert(make_words(["hello", "world"]), offset=0)
         buf.flush()
+        assert buf.unconfirmed_amount == 0
 
-        # Second pass: completely different words — no normal match, unconfirmed +1
+        # Pass 1: different words — no normal match, unconfirmed 0 → 1
         buf.insert(make_words(["zzzzz", "xxxxx"]), offset=0)
         commit = buf.flush()
-        assert commit == []  # No direct match, unconfirmed increments
+        assert commit == []
+        assert buf.unconfirmed_amount == 1
 
-        # Now buffer = ["zzzzz", "xxxxx"]. Third pass with yet another set of
-        # different words — fallback triggers but buffer vs new score is low.
+        # Pass 2: unconfirmed 1 >= 1 → fallback triggers.
+        # buffer = ["zzzzz", "xxxxx"], new = ["qqqqq", "jjjjj"] — score well below 95.
         buf.insert(make_words(["qqqqq", "jjjjj"]), offset=0)
         commit = buf.flush()
 
-        # Fallback triggered (threshold=1, unconfirmed was 1),
-        # but __fallback scored buffer ["zzzzz","xxxxx"] vs new ["qqqqq","jjjjj"]
-        # which should be well below 95.
         committed_texts = [w[2] for w in commit]
         assert "qqqqq" not in committed_texts
         assert "jjjjj" not in committed_texts
@@ -279,6 +280,24 @@ class TestFallbackLogic:
 
         assert len(commit) > 0
         assert buf.unconfirmed_amount == 0
+
+    def test_populate_flush_does_not_count(self):
+        """First flush (empty buffer) must not inflate unconfirmed_amount."""
+        buf = HypothesisBuffer(use_fallback=True, fallback_threshold=1)
+
+        buf.insert(make_words(["hello", "world"]), offset=0)
+        buf.flush()
+
+        # Populate flush should be skipped — counter stays at 0
+        assert buf.unconfirmed_amount == 0
+
+    def test_fallback_threshold_clamped_to_one(self):
+        """fallback_threshold < 1 is clamped to 1."""
+        buf = HypothesisBuffer(use_fallback=True, fallback_threshold=0)
+        assert buf.fallback_threshold == 1
+
+        buf2 = HypothesisBuffer(use_fallback=True, fallback_threshold=-5)
+        assert buf2.fallback_threshold == 1
 
     def test_fallback_disabled_by_default(self):
         """Without use_fallback=True, fallback never triggers."""

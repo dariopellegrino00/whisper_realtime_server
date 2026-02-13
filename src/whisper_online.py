@@ -119,7 +119,10 @@ class HypothesisBuffer:
         # Fuzzy Confirmation logic and fallback args
         self.fuzz_threshold = kwargs.get("qratio_threshold", 95)
         self.use_fallback = kwargs.get("use_fallback", False)
-        self.fallback_threshold = kwargs.get("fallback_threshold", 1)
+        _fb_thresh = kwargs.get("fallback_threshold", 1)
+        if _fb_thresh < 1:
+            logger.warning("fallback_threshold must be >= 1, got %s — clamping to 1", _fb_thresh)
+        self.fallback_threshold = max(1, _fb_thresh)
         self.unconfirmed_amount = 0
 
         self.logfile = logfile
@@ -208,6 +211,8 @@ class HypothesisBuffer:
         if self.use_fallback:
             if commit:
                 self.unconfirmed_amount = 0
+            elif not self.buffer:
+                pass  # populate flush — no prior buffer to compare against
             elif self.unconfirmed_amount >= self.fallback_threshold:
                 self.__fallback(commit)
                 self.unconfirmed_amount = 0
