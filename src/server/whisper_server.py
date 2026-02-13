@@ -79,7 +79,7 @@ class BaseSpeechToTextServicer(ABC):
         request_task = asyncio.create_task(stream_session.request_enqueuer(request_iterator))
 
         async with stream_session.processor_manager.context():
-            while not request_task.done():
+            while not (request_task.done() or stream_session.processor_manager.is_finished()):
                 if stream_session.processor_manager.audio_queue.empty():
                     await asyncio.sleep(0.001)
                     continue

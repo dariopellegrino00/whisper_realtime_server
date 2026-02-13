@@ -185,12 +185,12 @@ class HypothesisBuffer:
             for j, p in enumerate(prefixes): 
                 new_p = " ".join([k[-1] for k in self.new[:i+1]])
                 this_score = fuzz.QRatio(p, new_p)
-                if this_score > max_score: 
+                if this_score > max_score:
                     max_score = this_score
                     num_drops_buffer = j+1
                     num_drops_new = i+1
-        #print(f"best: {best}") 
-        self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
+        if max_score >= self.fuzz_threshold:
+            self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
 
     def flush(self):
         ### Changes from the original code for reduced delay at cost of more errors.
@@ -205,13 +205,14 @@ class HypothesisBuffer:
                 self.__commit_and_pop(1, 1, commit) 
             else: break
 
-        if self.use_fallback and commit == []: 
-            if self.unconfirmed_amount >= self.fallback_threshold: 
+        if self.use_fallback:
+            if commit:
+                self.unconfirmed_amount = 0
+            elif self.unconfirmed_amount >= self.fallback_threshold:
                 self.__fallback(commit)
                 self.unconfirmed_amount = 0
-            else: 
+            else:
                 self.unconfirmed_amount += 1
-        # never go true find why it breaks
 
         self.buffer = self.new
         self.new = []

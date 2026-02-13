@@ -108,11 +108,10 @@ class HypothesisWhispStreamSession(WhispStreamSession):
         return {"confirmed": TranscriptionManager(), "hypothesis": TranscriptionManager()}
 
     def create_response(self):
-        pass
         results = self.processor_manager.processor.results
         hypothesis = self.processor_manager.processor.hypothesis
         exist1, fmt_t = self.transcription_managers["confirmed"].format_transcript(results)
-        exist2, fmt_h = self.transcription_managers["hypothesis"].format_transcript(hypothesis)
+        exist2, fmt_h = self.transcription_managers["hypothesis"].format_transcript(hypothesis, use_last_end=False)
         return [self._create_response(*fmt_t, *fmt_h)] if exist1 or exist2 else []
 
     def final_response(self):
