@@ -127,6 +127,41 @@ class TestInsertDedup:
         # "two" and "three" should be deduped since they match committed tail
         assert "four" in new_texts
 
+    def test_insert_dedup_repeated_words(self):
+        """With repeated words, dedup finds the maximum overlap, not the first."""
+        buf = HypothesisBuffer()
+
+        # Commit "go home go home"
+        words = [(0.0, 0.5, "go"), (0.5, 1.0, "home"), (1.0, 1.5, "go"), (1.5, 2.0, "home")]
+        buf.insert(words, offset=0)
+        buf.flush()
+        buf.insert(words, offset=0)
+        buf.flush()
+
+        # New starts with "home go home" (3-word overlap) then "now"
+        new_words = [(1.0, 1.5, "home"), (1.5, 2.0, "go"), (2.0, 2.5, "home"), (2.5, 3.0, "now")]
+        buf.insert(new_words, offset=0)
+
+        new_texts = [w[2] for w in buf.new]
+        # All 3 overlapping words should be removed, only "now" remains
+        assert new_texts == ["now"]
+
+    def test_insert_dedup_custom_threshold(self):
+        """dedup_threshold is configurable."""
+        # Very high threshold — even slight mismatch won't dedup
+        buf = HypothesisBuffer(dedup_threshold=100)
+
+        words = [(0.0, 0.5, "hello"), (0.5, 1.0, "world")]
+        buf.insert(words, offset=0)
+        buf.flush()
+        buf.insert(words, offset=0)
+        buf.flush()
+
+        # "wrld" is close to "world" but not 100% match
+        buf.insert([(1.0, 1.5, "wrld"), (1.5, 2.0, "test")], offset=0)
+        new_texts = [w[2] for w in buf.new]
+        assert "wrld" in new_texts  # not deduped because threshold=100
+
     def test_insert_filters_old_words(self):
         """Words before last_commited_time - 0.1 are filtered out."""
         buf = HypothesisBuffer()

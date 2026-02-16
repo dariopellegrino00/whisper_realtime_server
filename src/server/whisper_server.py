@@ -133,6 +133,10 @@ async def serve(args):
         server_logger.error("qratio threshold must be between 0 and 100")
         sys.exit(1)
 
+    if args.dedup_threshold <= 0 or args.dedup_threshold > 100:
+        server_logger.error("dedup threshold must be between 0 and 100")
+        sys.exit(1)
+
     if args.fallback:
         server_logger.info("Fallback logic enabled")
         if args.fallback_threshold <= 0:
@@ -164,6 +168,7 @@ async def serve(args):
         "use_fallback": args.fallback,
         "fallback_threshold": args.fallback_threshold,
         "qratio_threshold": args.qratio_threshold,
+        "dedup_threshold": args.dedup_threshold,
         "buffer_trimming_sec": args.buffer_trimming_sec
     }
 
@@ -203,6 +208,7 @@ def main():
     parser.add_argument("--fallback", action="store_true", help="Enable fallback logic when similarity local agreement fails for a mltitude of times")
     parser.add_argument("--fallback-threshold", type=float, default=1, help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if --fallback is not set)")
     parser.add_argument("--qratio-threshold", type=float, default=95, help="Threshold for qratio to confirm and insert new words using the hypothesis buffer (between 0 and 100), lower values than 90 are not recommended")
+    parser.add_argument("--dedup-threshold", type=float, default=98, help="Threshold for qratio to deduplicate overlapping words between committed and new in the hypothesis buffer (between 0 and 100)")
     parser.add_argument("--buffer-trimming-sec", type=int, default=15, help="Buffer trimming is the threshold in seconds that triggers the service processor audio buffer to be trimmed. This is useful to avoid memory leaks and to keep the buffer size under control. Default value is 15 seconds")
 
     ### gRPC Layer server args 
