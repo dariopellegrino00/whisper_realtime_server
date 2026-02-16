@@ -118,6 +118,7 @@ class HypothesisBuffer:
         self.last_commited_word = None
         # Fuzzy Confirmation logic and fallback args
         self.fuzz_threshold = kwargs.get("qratio_threshold", 95)
+        self.dedup_threshold = kwargs.get("dedup_threshold", 98)
         self.use_fallback = kwargs.get("use_fallback", False)
         _fb_thresh = kwargs.get("fallback_threshold", 1)
         if _fb_thresh < 1:
@@ -138,20 +139,17 @@ class HypothesisBuffer:
             a,b,t = self.new[0]
             if abs(a - self.last_commited_time) < 1:
                 if self.commited_in_buffer:
-                    ### changed with fuzz ratio from original identical match
-                    # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
+                    # Remove overlapping prefix: compare committed tail vs new head
+                    # using n-grams from largest to smallest to find maximum overlap.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(1,min(min(cn,nn),10)+1):  # 5 is the maximum #TODO: Make n-ngrams value dynamic (min 5)
-                        c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
-                        tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
-                        ratio = fuzz.QRatio(c, tail, processor=utils.default_process)  
-                        if ratio > 98: #TODO: De-hardcode this value
-                            words = []
+                    for i in range(min(cn, nn, 10), 0, -1):
+                        c = " ".join(w[2] for w in self.commited_in_buffer[-i:])
+                        tail = " ".join(w[2] for w in self.new[:i])
+                        if fuzz.QRatio(c, tail, processor=utils.default_process) >= self.dedup_threshold:
                             for j in range(i):
-                                words.append(repr(self.new.pop(0)))
-                            words_msg = " ".join(words)
-                            logger.debug(f"removing last {i} words: {words_msg}")
+                                self.new.pop(0)
+                            logger.debug(f"dedup: removed {i} overlapping word(s)")
                             break
 
     ### Changes from the original code 
