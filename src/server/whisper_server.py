@@ -60,9 +60,8 @@ class BaseSpeechToTextServicer(ABC):
 
     async def StreamingRecognize(self, request_iterator, context):
 
-        stream_session = self.create_stream_session()  
-        id = stream_session.id # for logging purposes, shorter rows 
-        self.log_setup(id)
+        stream_session = self.create_stream_session()
+        id = stream_session.id # for logging purposes, shorter rows
 
         self._main_server_logger.info(f"Started connection on {id}")
 
@@ -99,7 +98,6 @@ class BaseSpeechToTextServicer(ABC):
                 for r in responses:
                     yield r
 
-        stream_session.processor_manager.processor.finish()
         final_responses = stream_session.final_response()
         for r in final_responses:
             yield r
@@ -206,7 +204,7 @@ def main():
     ### Services Hypothesis buffer args
     parser = argparse.ArgumentParser(description="Argument parser for the whisper-realtme-server")
     parser.add_argument("--fallback", action="store_true", help="Enable fallback logic when similarity local agreement fails for a mltitude of times")
-    parser.add_argument("--fallback-threshold", type=float, default=1, help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if --fallback is not set)")
+    parser.add_argument("--fallback-threshold", type=int, default=1, help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if --fallback is not set)")
     parser.add_argument("--qratio-threshold", type=float, default=95, help="Threshold for qratio to confirm and insert new words using the hypothesis buffer (between 0 and 100), lower values than 90 are not recommended")
     parser.add_argument("--dedup-threshold", type=float, default=98, help="Threshold for qratio to deduplicate overlapping words between committed and new in the hypothesis buffer (between 0 and 100)")
     parser.add_argument("--buffer-trimming-sec", type=int, default=15, help="Buffer trimming is the threshold in seconds that triggers the service processor audio buffer to be trimmed. This is useful to avoid memory leaks and to keep the buffer size under control. Default value is 15 seconds")

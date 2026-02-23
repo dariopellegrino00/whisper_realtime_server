@@ -39,14 +39,14 @@ class ASRBase:
         self.model = self.load_model(modelsize, cache_dir, model_dir)
 
 
-    def load_model(self, modelsize, cache_dir):
-        raise NotImplemented("must be implemented in the child class")
+    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
+        raise NotImplementedError("must be implemented in the child class")
 
     def transcribe(self, audio, init_prompt=""):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     def use_vad(self):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
 class FasterWhisperASR(ASRBase):
     """Uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version.
@@ -415,7 +415,7 @@ class OnlineASRProcessor:
         o = self.transcript_buffer.complete()
         f = self.to_flush(o)
         logger.debug(f"last, noncommited: {f}")
-        self.buffer_time_offset += len(self.audio_buffer)/16000
+        self.buffer_time_offset += len(self.audio_buffer)/self.SAMPLING_RATE
         return f
 
 

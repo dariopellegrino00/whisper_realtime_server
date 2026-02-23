@@ -23,10 +23,7 @@ class AudioConfig:
     def chunk_size(cls):
         return int(cls.chunk_duration * cls.sample_rate)
 
-    @classmethod
-    def chunk_samples(cls):
-        "same as chunk_size()"
-        return int(cls.chunk_duration * cls.sample_rate)
+
 
 # gRPC client for transcription
 class TranscriptorClient:
@@ -75,8 +72,6 @@ class TranscriptorClient:
 
                 yield speech_pb2.AudioChunk(audio_bytes=np.array(chunk_resampled, dtype=np.float32).tobytes())
 
-                time.sleep(AudioConfig.chunk_duration)
-
     def generate_audio_chunks(self):
         """
         Iteratively generates 1-second audio chunks.
@@ -115,7 +110,7 @@ class TranscriptorClient:
                     if self.interactive:
                         # Update the transcript on the same line. 
                     # Clear the line and write the updated transcript
-                        if response.text[-1] == "." and  response.start_time_millis - last_resp_time > 1000:
+                        if response.text and response.text[-1] == "." and response.start_time_millis - last_resp_time > 1000:
                             print(response.text)
                         else:
                             print(response.text, end="", flush=True)
