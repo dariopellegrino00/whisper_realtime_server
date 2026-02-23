@@ -13,34 +13,38 @@ class ParallelAudioBuffer:
     """
 
     def __init__(self):
-        self._audio = np.array([],dtype=np.float32)        
+        self._audio_chunks = []
+        self._audio_size = 0
         self._segment_times = []
         self._ids = []
 
     def reset(self):
-        """resets all fields to constructor init"""
-        self.__dict__.update(self.__class__().__dict__)
+        self._audio_chunks = []
+        self._audio_size = 0
+        self._segment_times = []
+        self._ids = []
 
     def append_token(self, id, audio):
-        audio_lenth = len(audio)
-        if audio_lenth == 0:
+        audio_length = len(audio)
+        if audio_length == 0:
             return
-        buffer_length = self.size 
-  
-        self._segment_times.append({"start": buffer_length, "end":(buffer_length + audio_lenth)})
+
+        self._segment_times.append({"start": self._audio_size, "end": self._audio_size + audio_length})
         self._ids.append(id)
-        self._audio = np.append(self._audio, audio)
-        self._audio = np.append(self._audio, np.zeros(100, dtype=np.float32)) # add a zero to avoid the last segment to be cutted
+        self._audio_chunks.append(audio)
+        self._audio_chunks.append(np.zeros(100, dtype=np.float32))  # padding to avoid last segment cutoff
+        self._audio_size += audio_length + 100
 
     @property
     def size(self):
-        return len(self._audio)
+        return self._audio_size
 
     def __len__(self):
-        return self.size
+        return self._audio_size
 
     def parameters(self):
-        ns = SimpleNamespace(ids=self._ids, audio=self._audio, segment_times=self._segment_times)
+        audio = np.concatenate(self._audio_chunks) if self._audio_chunks else np.array([], dtype=np.float32)
+        ns = SimpleNamespace(ids=self._ids, audio=audio, segment_times=self._segment_times)
         return copy.deepcopy(ns)
 
 class MultiProcessingFasterWhisperASR(FasterWhisperASR):
@@ -198,7 +202,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         k = len(self.commited)-1
         s = self.buffer_trimming_sec
         if self.buffer_time_seconds > s and k >= 0:
-            l = self.buffer_time_offset + self.buffer_time_seconds - (s//2) 
+            l = self.buffer_time_offset + self.buffer_time_seconds - (s / 2)
             while k>0 and self.commited[k][1] > l:
                 k -= 1
             t = self.commited[k][1] 
@@ -229,7 +233,8 @@ class ParallelRealtimeASR:
         self._stopped = False
         self._loop_task = None
         self._last_transcript_time_seconds = 0.0  # last transcription time
-        self._transcript_timeout_seconds = 2.0  # default timeout for transcription
+        self._estimated_transcription_time = 1.0  # EWMA estimate of transcription time
+        self._transcript_timeout_seconds = 2.0  # timeout = estimate * safety margin
         self._timed_out = False
 
         if warmup_file:
@@ -311,9 +316,9 @@ class ParallelRealtimeASR:
                     if self._timed_out:
                         self._logger.error("Timeout waiting for transcription")
                         await self._exclude_timed_out_processors()
-                    else:
-                        await asyncio.sleep(0.001)
-                        continue
+                        self._timed_out = False
+                    await asyncio.sleep(0.001)
+                    continue
 
                 self._timed_out = False
                 await self._reset_ready_pids()
@@ -338,9 +343,9 @@ class ParallelRealtimeASR:
                         self._logger.debug(f"Result {processor_id}: {processor.asr_processor.results}")
 
                 self._transcription_event.set()
-                last_transcription_time_seconds = self._last_transcript_time_seconds
                 self._last_transcript_time_seconds = time.time() - timestamp
-                self._transcript_timeout_seconds = last_transcription_time_seconds*0.7 + self._last_transcript_time_seconds
+                self._estimated_transcription_time = self._estimated_transcription_time * 0.7 + self._last_transcript_time_seconds * 0.3
+                self._transcript_timeout_seconds = self._estimated_transcription_time * 2.0
 
                 timestamp = time.time()
 
