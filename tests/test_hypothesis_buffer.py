@@ -268,13 +268,8 @@ class TestFallbackLogic:
         buf.flush()
         assert buf.unconfirmed_amount == 0
 
-    def test_fallback_minimum_score_applied(self):
-        """Fallback with low-score match doesn't commit (Fix C).
-
-        When fallback triggers, __fallback compares buffer prefixes vs new prefixes.
-        If the best fuzzy score is below fuzz_threshold, nothing is committed.
-        We need buffer and new to contain *different* words so the score is low.
-        """
+    def test_fallback_commits_best_prefix_even_with_low_score(self):
+        """Fallback remains permissive and can advance on low-score prefixes."""
         buf = HypothesisBuffer(use_fallback=True, fallback_threshold=1, qratio_threshold=95)
 
         # Populate pass: fills buffer, unconfirmed stays 0
@@ -288,14 +283,41 @@ class TestFallbackLogic:
         assert commit == []
         assert buf.unconfirmed_amount == 1
 
-        # Pass 2: unconfirmed 1 >= 1 → fallback triggers.
-        # buffer = ["zzzzz", "xxxxx"], new = ["qqqqq", "jjjjj"] — score well below 95.
+        # Pass 2: unconfirmed 1 >= 1 → fallback triggers and commits the best prefix
+        # even though the score is well below the normal confirmation threshold.
         buf.insert(make_words(["qqqqq", "jjjjj"]), offset=0)
         commit = buf.flush()
 
         committed_texts = [w[2] for w in commit]
-        assert "qqqqq" not in committed_texts
-        assert "jjjjj" not in committed_texts
+        assert "qqqqq" in committed_texts
+        assert "jjjjj" in committed_texts
+
+    def test_fallback_ignores_words_beyond_filtered_window(self):
+        """Fallback should only compare prefixes inside the filtered time window."""
+        buf = HypothesisBuffer(use_fallback=True, fallback_threshold=1, qratio_threshold=95)
+
+        # Populate pass: fills buffer with a short prefix.
+        buf.insert(make_words(["alpha", "beta"], start=0.0, step=0.5), offset=0)
+        buf.flush()
+
+        # First mismatch increments unconfirmed_count and becomes the next buffer.
+        buf.insert(make_words(["noise", "words"], start=0.0, step=0.5), offset=0)
+        buf.flush()
+        assert buf.unconfirmed_amount == 1
+
+        # The first word is inside the fallback window, the second is not.
+        # Using self.new here would incorrectly match "alpha beta".
+        buf.buffer = make_words(["alpha", "beta"], start=0.0, step=0.5)
+        buf.new = [
+            (0.0, 0.5, "alpha"),
+            (3.0, 3.5, "beta"),
+        ]
+
+        commit = []
+        buf._HypothesisBuffer__fallback(commit)
+
+        committed_texts = [w[2] for w in commit]
+        assert committed_texts == ["alpha"]
 
     def test_unconfirmed_resets_on_commit(self):
         """Successful commit resets unconfirmed_amount (Fix #4)."""

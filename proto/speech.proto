@@ -11,6 +11,17 @@ message AudioChunk {
   // timestamp can be used to align the audio chunks and testing
 }
 
+message StreamingConfig {
+  int32 chunk_duration_millis = 1;
+}
+
+message StreamingRecognizeRequest {
+  oneof payload {
+    StreamingConfig config = 1;
+    AudioChunk audio_chunk = 2;
+  }
+}
+
 message Transcript {
   int32 start_time_millis = 1;
   int32 end_time_millis = 2;
@@ -24,10 +35,10 @@ message TranscriptWithHypothesis {
 
 // Bidirectional streaming without unconfirmed hypothesis 
 service SpeechToText {
-  rpc StreamingRecognize(stream AudioChunk) returns (stream Transcript);
+  rpc StreamingRecognize(stream StreamingRecognizeRequest) returns (stream Transcript);
 }
 
 // Bidirectional streaming with unconfirmed hypothesis
 service SpeechToTextWithHypothesis {
-  rpc StreamingRecognize(stream AudioChunk) returns (stream TranscriptWithHypothesis);
+  rpc StreamingRecognize(stream StreamingRecognizeRequest) returns (stream TranscriptWithHypothesis);
 }

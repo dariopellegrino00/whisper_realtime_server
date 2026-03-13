@@ -9,6 +9,8 @@ from rapidfuzz import fuzz, utils
 
 logger = logging.getLogger(__name__)
 
+MAX_DEDUP_NGRAM_SIZE = 10
+
 @lru_cache(10**6)
 def load_audio(fname):
     a, _ = librosa.load(fname, sr=16000, dtype=np.float32)
@@ -143,7 +145,7 @@ class HypothesisBuffer:
                     # using n-grams from largest to smallest to find maximum overlap.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(min(cn, nn, 10), 0, -1):
+                    for i in range(min(cn, nn, MAX_DEDUP_NGRAM_SIZE), 0, -1):
                         c = " ".join(w[2] for w in self.commited_in_buffer[-i:])
                         tail = " ".join(w[2] for w in self.new[:i])
                         if fuzz.QRatio(c, tail, processor=utils.default_process) >= self.dedup_threshold:
@@ -176,22 +178,21 @@ class HypothesisBuffer:
         
         max_score = 0
         half_time = self.buffer[half][1] + 1
-        new_filterd = [e for e in self.new if e[1] <= half_time]
+        new_filtered = [e for e in self.new if e[1] <= half_time]
         #best = { "buffer": "", "num_drops_buffer": 0,"new": "", "num_drops_new": 0,"score": 0,#} 
         #uses a dict fot debugging purpose only
         num_drops_buffer = 0
         num_drops_new = 0
 
-        for i in range(len(new_filterd)):
+        for i in range(len(new_filtered)):
             for j, p in enumerate(prefixes): 
-                new_p = " ".join([k[-1] for k in self.new[:i+1]])
+                new_p = " ".join(k[-1] for k in new_filtered[:i+1])
                 this_score = fuzz.QRatio(p, new_p)
                 if this_score > max_score:
                     max_score = this_score
                     num_drops_buffer = j+1
                     num_drops_new = i+1
-        if max_score >= self.fuzz_threshold:
-            self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
+        self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
 
     def flush(self):
         ### Changes from the original code for reduced delay at cost of more errors.
@@ -433,4 +434,3 @@ class OnlineASRProcessor:
             b = offset + sents[0][0]
             e = offset + sents[-1][1]
         return (b,e,t)
-
