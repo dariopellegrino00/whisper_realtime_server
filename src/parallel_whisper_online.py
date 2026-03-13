@@ -1,17 +1,18 @@
 import asyncio
-import numpy as np
+import copy
 import logging
 import os
 import time
-import copy
+from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import Dict
+
+import numpy as np
+
 from src.whisper_online import *
 
-class ParallelAudioBuffer:
-    """A shared audio buffer for parallel processing.
-    This class is used to store audio chunks and their corresponding ids and segment timesfor each client (or segment).
-    """
 
+class ParallelAudioBuffer:
     def __init__(self):
         self._audio_chunks = []
         self._audio_size = 0
@@ -32,7 +33,7 @@ class ParallelAudioBuffer:
         self._segment_times.append({"start": self._audio_size, "end": self._audio_size + audio_length})
         self._ids.append(id)
         self._audio_chunks.append(audio)
-        self._audio_chunks.append(np.zeros(100, dtype=np.float32))  # padding to avoid last segment cutoff
+        self._audio_chunks.append(np.zeros(100, dtype=np.float32))
         self._audio_size += audio_length + 100
 
     @property
@@ -47,129 +48,99 @@ class ParallelAudioBuffer:
         ns = SimpleNamespace(ids=self._ids, audio=audio, segment_times=self._segment_times)
         return copy.deepcopy(ns)
 
-class MultiProcessingFasterWhisperASR(FasterWhisperASR):
-    """A paralell implementation of the whisper-streaming FasterWhisperASR legacy class.
-    The transcribe method use a batched pipeline, and a SharedAudioBuffer to handle multiple clients.
-    """
 
+class MultiProcessingFasterWhisperASR(FasterWhisperASR):
     def __init__(self, lan, modelsize=None, cache_dir=None, model_dir=None, logfile=logging.getLogger(__name__)):
-        self._client_events = [] # events to signal the clients when their transcription is done
-        self._last_transcript_time = 0.0 # last transcription time
+        self._client_events = []
+        self._last_transcript_time = 0.0
         self._log = logfile
-        super().__init__(lan, modelsize, cache_dir, model_dir, logfile)# cant use vad if segment times self.use_vad() 
+        super().__init__(lan, modelsize, cache_dir, model_dir, logfile)
 
     @staticmethod
     def normalize_segment(start, segment):
-        """
-        Normalizes the segment timestamps to their relative start time.
-        """
-        o = []
+        output = []
         for word in segment.words:
             if segment.no_speech_prob > 0.9:
                 continue
-            # not stripping the spaces -- should not be merged with them!
-            t = (round(word.start - start, 5), round(word.end - start, 5), word.word)
-            o.append(t)
-        return o
+            output.append((round(word.start - start, 5), round(word.end - start, 5), word.word))
+        return output
 
-    def warmup(self, filepath): 
-        """
-        original repo asr warmup code, (without logging) 
-        warm up the ASR because the very first transcribe takes more time than the others. 
-        Test results in https://github.com/ufal/whisper_streaming/pull/81
-        """
-        if filepath: 
+    def warmup(self, filepath):
+        if filepath:
             if os.path.isfile(filepath):
-                audio = load_audio_chunk(filepath,0,1)
+                audio = load_audio_chunk(filepath, 0, 1)
                 buffer = ParallelAudioBuffer()
                 buffer.append_token(1, audio)
                 self.transcribe_parallel(buffer)
-                self._log.info("asr is warmed up") 
-            else: self._log.info(f"{filepath} not found")
-        else: self._log.info("no warmup file provided or file not found")
-
+                self._log.info("asr is warmed up")
+            else:
+                self._log.info(f"{filepath} not found")
+        else:
+            self._log.info("no warmup file provided or file not found")
 
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        """
-        This methods is needed to override the model in the superclass 
-        constructor to use the batched pipeline of faster-whisper
-        """
         from faster_whisper import BatchedInferencePipeline
+
         model = super().load_model(modelsize, cache_dir, model_dir)
-        pipe = BatchedInferencePipeline(model)
-        return pipe 
+        return BatchedInferencePipeline(model)
 
     def transcribe_parallel(self, audio_buffer: ParallelAudioBuffer):
-        """
-        Given a ParallelAudioBuffer, transcribe and returns the 
-        segments tagged with the the corresponding segments for each client.
-        Should be used for multiple audio inference
-        """
-        if not len(audio_buffer): # not processing if empty  
-            return [] 
-        
-        parameters = audio_buffer.parameters()  
+        if not len(audio_buffer):
+            return []
+
+        parameters = audio_buffer.parameters()
         timestamp = time.time()
 
         segments, _ = self.model.transcribe(
-            parameters.audio, 
-            beam_size=5, 
-            condition_on_previous_text=False, 
-            multilingual=True, 
-            word_timestamps=True, 
+            parameters.audio,
+            beam_size=5,
+            condition_on_previous_text=False,
+            multilingual=True,
+            word_timestamps=True,
             clip_timestamps=parameters.segment_times,
-            batch_size=16, 
-        ) #check if info util
+            batch_size=16,
+        )
 
-        # segments is the segment generator produced by transcribe, applying list generate the segments
-        segment_list = list(segments) # list(segments) is the real consuming part of generating transcriptions
-
-        #[self._log.info(s.text) for s in segment_list] #log the segments just transcribed
-        # this part zip (processor_id, start_time, segment) to the corresponding id
-        # then using the start time it shift the word's timestamp in segment to the real timestamp 
-        # in the processor that requested the transcription using normalize_segment 
+        segment_list = list(segments)
         results_tagged = [
-            (id, self.normalize_segment(start, seg)) for (id, start, seg) in list(zip(
+            (id, self.normalize_segment(start, seg))
+            for (id, start, seg) in zip(
                 parameters.ids,
-                [time["start"]/OnlineASRProcessor.SAMPLING_RATE for time in parameters.segment_times], 
-                segment_list
+                [segment["start"] / OnlineASRProcessor.SAMPLING_RATE for segment in parameters.segment_times],
+                segment_list,
             )
-        )]
+        ]
 
-        self._last_transcript_time = time.time() - timestamp 
+        self._last_transcript_time = time.time() - timestamp
         self._log.debug(f"transcription time: {self._last_transcript_time} seconds")
+        return results_tagged
 
-        return results_tagged 
 
 class ParallelOnlineASRProcessor(OnlineASRProcessor):
-    """An OnlineASRProcessor that can be used in parallel with other processors.
-
-    This subclass is used to make OnlineASRProcessor compatible with the ParallelRealtimeASR class.
-    Implements new methods reusing the original OnlineASRProcessor code, keeping only the necessary modifications.
-    """
-
     def __init__(self, asr, logger=logging.getLogger(__name__), **kwargs):
         super().__init__(asr, **kwargs)
         self.logger = logger
-        self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15) # seconds to trim the buffer
+        self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15)
         self._result = None
         self._hypothesis = None
         self.timed_out = False
 
     @property
     def buffer_time_seconds(self):
-        return len(self.audio_buffer)/self.SAMPLING_RATE
+        return len(self.audio_buffer) / self.SAMPLING_RATE
 
     def update(self, results):
         self.logger.debug("ITERATION START\n")
-        self.logger.debug(f"transcribing {self.buffer_time_seconds:2.2f} seconds from {self.buffer_time_offset:2.2f}")
+        self.logger.debug(
+            f"transcribing {self.buffer_time_seconds:2.2f} seconds from {self.buffer_time_offset:2.2f}"
+        )
 
         self.transcript_buffer.insert(results, self.buffer_time_offset)
 
-        o = self.transcript_buffer.flush()
-        self.commited.extend(o)
+        committed = self.transcript_buffer.flush()
+        self.commited.extend(committed)
 
-        self._result = self.to_flush(o)
+        self._result = self.to_flush(committed)
         self.logger.debug(f">>>>COMPLETE NOW: {self._result}")
 
         self._hypothesis = self.to_flush(self.transcript_buffer.complete())
@@ -182,45 +153,30 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
 
     @property
     def hypothesis(self):
-        """
-        Returns the flushed unconfirmed part of the buffer.
-        """
         return self._hypothesis
 
     @property
     def results(self):
-        """ 
-        Returns the flushed confirmed part of the buffer.
-        """
         return self._result
 
     def _chunk_buffer_at(self):
-        """
-        Chunking the audio buffer on the end timestamps of the last committed words.
-        """
-        # Chunking here check original OnlineASRProcessor: chunck the buffer on on last committed work  
-        k = len(self.commited)-1
+        k = len(self.commited) - 1
         s = self.buffer_trimming_sec
         if self.buffer_time_seconds > s and k >= 0:
-            l = self.buffer_time_offset + self.buffer_time_seconds - (s / 2)
-            while k>0 and self.commited[k][1] > l:
+            limit = self.buffer_time_offset + self.buffer_time_seconds - (s / 2)
+            while k > 0 and self.commited[k][1] > limit:
                 k -= 1
-            t = self.commited[k][1] 
+            t = self.commited[k][1]
             self.logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
             self.chunk_at(t)
 
-from typing import Dict
-from dataclasses import dataclass
 
 @dataclass
-class RegisteredProcess():
-    """Store data used to progress the ParallalASRProcess in parallel.
-    Contains the ASR processor, a flag to indicate if the processor has committed new audio and is ready to be processed,
-    and a flag to indicate if the processor has never committed audio to have a chance to be processed next time.
-    """
-    asr_processor : ParallelOnlineASRProcessor
-    ready_flag : bool = False
-    never_commited_flag : bool = True
+class RegisteredProcess:
+    asr_processor: ParallelOnlineASRProcessor
+    ready_flag: bool = False
+    never_commited_flag: bool = True
+
 
 class ParallelRealtimeASR:
     def __init__(self, modelsize="large-v3-turbo", logger=None, warmup_file=None):
@@ -232,9 +188,9 @@ class ParallelRealtimeASR:
         self._asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=self._logger)
         self._stopped = False
         self._loop_task = None
-        self._last_transcript_time_seconds = 0.0  # last transcription time
-        self._estimated_transcription_time = 1.0  # EWMA estimate of transcription time
-        self._transcript_timeout_seconds = 2.0  # timeout = estimate * safety margin
+        self._last_transcript_time_seconds = 0.0
+        self._estimated_transcription_time = 1.0
+        self._transcript_timeout_seconds = 2.0
         self._timed_out = False
 
         if warmup_file:
@@ -254,10 +210,7 @@ class ParallelRealtimeASR:
 
     async def register_processor(self, id, asr_processor):
         async with self._register_lock:
-            self._registered_pids[id] = RegisteredProcess(
-                asr_processor=asr_processor,
-                ready_flag=False,
-            )
+            self._registered_pids[id] = RegisteredProcess(asr_processor=asr_processor, ready_flag=False)
 
     async def unregister_processor(self, id):
         async with self._register_lock:
@@ -279,11 +232,11 @@ class ParallelRealtimeASR:
             await asyncio.wait_for(self._transcription_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             self._timed_out = True
-            await asyncio.sleep(0.001)  # yield control to the asr loop
+            await asyncio.sleep(0.001)
 
     async def _all_pid_ready(self):
         async with self._register_lock:
-            return len(self._registered_pids) > 0 and all(x.ready_flag for x in self._registered_pids.values())
+            return len(self._registered_pids) > 0 and all(proc.ready_flag for proc in self._registered_pids.values())
 
     async def _reset_ready_pids(self):
         async with self._register_lock:
@@ -344,10 +297,10 @@ class ParallelRealtimeASR:
 
                 self._transcription_event.set()
                 self._last_transcript_time_seconds = time.time() - timestamp
-                self._estimated_transcription_time = self._estimated_transcription_time * 0.7 + self._last_transcript_time_seconds * 0.3
+                self._estimated_transcription_time = (
+                    self._estimated_transcription_time * 0.7 + self._last_transcript_time_seconds * 0.3
+                )
                 self._transcript_timeout_seconds = self._estimated_transcription_time * 2.0
-
                 timestamp = time.time()
-
-        except Exception as e:
-            self._logger.exception(e)
+        except Exception as exc:
+            self._logger.exception(exc)

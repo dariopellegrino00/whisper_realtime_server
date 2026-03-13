@@ -145,6 +145,8 @@ if you followed the `Building with Docker` section and you want to run the clien
    --chunk-duration     Change the chunk duration (in seconds) for the audio stream
    ```
 
+   The first streaming message must be a session config. The client sends `chunk_duration` there, and the server accepts values up to `--max-chunk-duration-seconds` (default `1.0`). In practice, a `chunk_duration` around `0.4s` to `1.0s` works best for this shared realtime setup.
+
       Example with confirmed only tokens:
 
       Standard output:
@@ -180,11 +182,18 @@ if you followed the `Building with Docker` section and you want to run the clien
                         Threshold for qratio to confirm and insert new words
                         using the hypothesis buffer (between 0 and 100), lower
                         values than 90 are not recommended
+   --dedup-threshold DEDUP_THRESHOLD
+                        Threshold for qratio to deduplicate overlapping words
+                        between committed and new words in the hypothesis
+                        buffer (between 0 and 100)
    --buffer-trimming-sec BUFFER_TRIMMING_SEC
                         Buffer trimming is the threshold in seconds that triggers
                         the service processor audio buffer to be trimmed. This is
                         useful to avoid memory leaks and to keep the buffer size
                         under control. Default value is 15 seconds
+   --max-chunk-duration-seconds MAX_CHUNK_DURATION_SECONDS
+                        Maximum chunk duration accepted from the client session
+                        config (default: 1.0)
    --ports PORTS [PORTS ...]
                         Ports to run the server on
    --max-workers MAX_WORKERS
@@ -193,7 +202,7 @@ if you followed the `Building with Docker` section and you want to run the clien
                         Log every processor in a separate file
    --model {tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo}
                         Name size of the Whisper model to use (default:
-                        large-v2). The model is automatically downloaded from the
+                        large-v3-turbo). The model is automatically downloaded from the
                         model hub if not present in model cache dir
    --model-cache-dir MODEL_CACHE_DIR
                         Directory for the whisper model caching
@@ -206,8 +215,8 @@ if you followed the `Building with Docker` section and you want to run the clien
                         the moment)
    --vad                 Use VAD for the model (unused at the moment)
    --log-level LOG_LEVEL
-                        Log level for the server (DEBUG, INFO, WARNING, ERROR,
-                        CRITICAL) unused at the moment
+                        Log level for the server and shared ASR logger (DEBUG,
+                        INFO, WARNING, ERROR, CRITICAL)
    ```
 
 ## Documentation
@@ -216,6 +225,8 @@ if you followed the `Building with Docker` section and you want to run the clien
 > TODO: Add more documentation
 
 Before setting up your own client, it's important to understand the server architecture. The client first connects to a GRPC server on the default port (`50051`). After connecting, the GRPC server assigns a service to the client. Then the client streams audio data to this port, and receives real-time transcriptions.&#x20;
+
+At the moment the server runs a single shared `ParallelRealtimeASR` backend for all active streams. Each client gets its own stream processor state, but ready processors are grouped into the same shared inference cycle. Two gRPC services are exposed: one returning confirmed transcript segments only, and one returning confirmed segments plus the current hypothesis. With the current protocol, the first streaming message is a config carrying the client `chunk_duration`. In practice, clients connected to the same server instance should use the same `chunk_duration`, and that duration should stay at or below the server `--max-chunk-duration-seconds` limit.
 
 
 ## Credits
