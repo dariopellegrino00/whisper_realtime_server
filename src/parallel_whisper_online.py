@@ -3,13 +3,15 @@ import copy
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Dict
 
 import numpy as np
 
 from src.whisper_online import *
+
+DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS = 1.0
 
 
 class ParallelAudioBuffer:
@@ -89,7 +91,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             return []
 
         parameters = audio_buffer.parameters()
-        timestamp = time.time()
+        timestamp = time.monotonic()
 
         segments, _ = self.model.transcribe(
             parameters.audio,
@@ -111,7 +113,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             )
         ]
 
-        self._last_transcript_time = time.time() - timestamp
+        self._last_transcript_time = time.monotonic() - timestamp
         self._log.debug(f"transcription time: {self._last_transcript_time} seconds")
         return results_tagged
 
@@ -175,23 +177,21 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
 class RegisteredProcess:
     asr_processor: ParallelOnlineASRProcessor
     ready_flag: bool = False
-    never_commited_flag: bool = True
+    never_committed_flag: bool = True
+    chunk_duration_seconds: float = DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS
+    transcription_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class ParallelRealtimeASR:
     def __init__(self, modelsize="large-v3-turbo", logger=None, warmup_file=None):
         self._registered_pids: Dict[int, RegisteredProcess] = {}
         self._register_lock = asyncio.Lock()
-        self._transcription_event = asyncio.Event()
         self._audio_buffer = ParallelAudioBuffer()
         self._logger = logger if logger is not None else logging.getLogger(__name__)
         self._asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=self._logger)
         self._stopped = False
         self._loop_task = None
-        self._last_transcript_time_seconds = 0.0
-        self._estimated_transcription_time = 1.0
-        self._transcript_timeout_seconds = 2.0
-        self._timed_out = False
+        self._loop_failure = None
 
         if warmup_file:
             self._asr.warmup(warmup_file)
@@ -205,16 +205,32 @@ class ParallelRealtimeASR:
 
     async def stop(self):
         self._stopped = True
+        async with self._register_lock:
+            for process in self._registered_pids.values():
+                process.transcription_event.set()
         if self._loop_task:
             await self._loop_task
 
     async def register_processor(self, id, asr_processor):
         async with self._register_lock:
-            self._registered_pids[id] = RegisteredProcess(asr_processor=asr_processor, ready_flag=False)
+            if self._loop_failure is not None:
+                raise RuntimeError("Shared ASR loop failed") from self._loop_failure
+            self._registered_pids[id] = RegisteredProcess(
+                asr_processor=asr_processor,
+                ready_flag=False,
+                chunk_duration_seconds=getattr(
+                    asr_processor,
+                    "chunk_duration_seconds",
+                    DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS,
+                ),
+            )
 
     async def unregister_processor(self, id):
         async with self._register_lock:
-            return self._registered_pids.pop(id, None)
+            registered = self._registered_pids.pop(id, None)
+            if registered is not None:
+                registered.transcription_event.set()
+            return registered
 
     def append_audio(self, id, audio):
         self._audio_buffer.append_token(id, audio)
@@ -222,85 +238,165 @@ class ParallelRealtimeASR:
     async def set_processor_ready(self, id):
         async with self._register_lock:
             if id in self._registered_pids:
+                self._registered_pids[id].transcription_event.clear()
                 self._registered_pids[id].ready_flag = True
             else:
                 raise ValueError(f"{id} is not a registered processor.")
 
-    async def wait(self):
-        try:
-            timeout = max(self._transcript_timeout_seconds, len(self._registered_pids) * 0.15)
-            await asyncio.wait_for(self._transcription_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            self._timed_out = True
-            await asyncio.sleep(0.001)
-
-    async def _all_pid_ready(self):
+    async def wait(self, processor_id):
+        if self._loop_failure is not None:
+            raise RuntimeError("Shared ASR loop failed") from self._loop_failure
         async with self._register_lock:
-            return len(self._registered_pids) > 0 and all(proc.ready_flag for proc in self._registered_pids.values())
+            registered = self._registered_pids.get(processor_id)
+            if registered is None:
+                return
+            transcription_event = registered.transcription_event
+        await transcription_event.wait()
+        if self._loop_failure is not None:
+            raise RuntimeError("Shared ASR loop failed") from self._loop_failure
 
-    async def _reset_ready_pids(self):
+    def _barrier_timeout_seconds(self):
+        max_chunk_duration = max(
+            (proc.chunk_duration_seconds for proc in self._registered_pids.values()),
+            default=DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS,
+        )
+        return max_chunk_duration * 2
+
+    async def _ready_counts(self):
         async with self._register_lock:
-            for pid in self._registered_pids:
-                self._registered_pids[pid].ready_flag = False
-                self._registered_pids[pid].never_commited_flag = False
+            registered_count = len(self._registered_pids)
+            ready_count = sum(1 for proc in self._registered_pids.values() if proc.ready_flag)
+            return ready_count, registered_count
+
+    async def _claim_ready_processors(self):
+        async with self._register_lock:
+            claimed = {}
+            for pid, process in self._registered_pids.items():
+                if not process.ready_flag:
+                    continue
+                process.ready_flag = False
+                process.never_committed_flag = False
+                claimed[pid] = process.asr_processor
+            return claimed
+
+    async def _timed_out_processor_candidates(self):
+        async with self._register_lock:
+            return {
+                pid
+                for pid, process in self._registered_pids.items()
+                if not process.ready_flag
+            }
 
     async def _exclude_timed_out_processors(self):
         async with self._register_lock:
             to_remove = [pid for pid, proc in self._registered_pids.items() if not proc.ready_flag]
             for pid in to_remove:
                 rp = self._registered_pids[pid]
-                if rp.never_commited_flag:
+                if rp.never_committed_flag:
                     self._logger.info(f"Processor {pid} is new and not ready, giving grace period.")
-                    rp.never_commited_flag = False
+                    rp.never_committed_flag = False
                 else:
                     self._logger.warning(f"Processor {pid} timed out and will be excluded.")
                     rp.asr_processor.timed_out = True
+                    rp.transcription_event.set()
                     self._registered_pids.pop(pid)
+
+    async def _exclude_still_not_ready_processors(self, processor_ids):
+        async with self._register_lock:
+            for pid in processor_ids:
+                process = self._registered_pids.get(pid)
+                if process is None or process.ready_flag:
+                    continue
+                if process.never_committed_flag:
+                    self._logger.info(f"Processor {pid} is new and not ready, giving grace period.")
+                    process.never_committed_flag = False
+                    continue
+                self._logger.warning(f"Processor {pid} timed out and will be excluded.")
+                process.asr_processor.timed_out = True
+                process.transcription_event.set()
+                self._registered_pids.pop(pid)
+
+    async def _transcribe_current_processors(self, current_processors, waiting_time):
+        processor_ids = sorted(current_processors)
+        total_audio_seconds = sum(
+            len(processor.audio_buffer) / OnlineASRProcessor.SAMPLING_RATE
+            for processor in current_processors.values()
+        )
+        self._logger.debug(f"Time lost waiting {waiting_time} seconds")
+        self._logger.info(
+            "Transcribing %d processor(s): ids=%s total_audio_seconds=%.2f waited=%.3fs registered=%d",
+            len(current_processors),
+            processor_ids,
+            total_audio_seconds,
+            waiting_time,
+            len(self._registered_pids),
+        )
+
+        async with self._register_lock:
+            for pid, processor in current_processors.items():
+                self.append_audio(pid, processor.audio_buffer)
+
+        loop = asyncio.get_running_loop()
+        transcription_started_at = time.monotonic()
+        results = await loop.run_in_executor(None, self._asr.transcribe_parallel, self._audio_buffer)
+        transcription_elapsed = time.monotonic() - transcription_started_at
+        self._audio_buffer.reset()
+        self._logger.info(
+            "Transcribed %d processor(s) in %.3fs",
+            len(current_processors),
+            transcription_elapsed,
+        )
+
+        results_by_id = {processor_id: result for processor_id, result in results}
+
+        for processor_id, processor in current_processors.items():
+            result = results_by_id.get(processor_id, [])
+            processor.update(result)
+            self._logger.debug(f"Result {processor_id}: {processor.results}")
+            async with self._register_lock:
+                registered = self._registered_pids.get(processor_id)
+                if registered is not None:
+                    registered.transcription_event.set()
 
     async def _asr_loop(self):
         self._logger.info("ASR loop started")
-        timestamp = time.time()
+        batch_wait_started_at = None
 
         try:
             while not self._stopped:
-                self._transcription_event.clear()
+                ready_count, registered_count = await self._ready_counts()
 
-                if not await self._all_pid_ready():
-                    if self._timed_out:
+                if ready_count != registered_count or registered_count == 0:
+                    if ready_count == 0:
+                        batch_wait_started_at = None
+                        await asyncio.sleep(0.001)
+                        continue
+
+                    if batch_wait_started_at is None:
+                        batch_wait_started_at = time.monotonic()
+
+                    if time.monotonic() - batch_wait_started_at >= self._barrier_timeout_seconds():
                         self._logger.error("Timeout waiting for transcription")
-                        await self._exclude_timed_out_processors()
-                        self._timed_out = False
+                        waiting_time = time.monotonic() - batch_wait_started_at
+                        timed_out_candidates = await self._timed_out_processor_candidates()
+                        current_processors = await self._claim_ready_processors()
+                        if current_processors:
+                            await self._transcribe_current_processors(current_processors, waiting_time)
+                            await self._exclude_still_not_ready_processors(timed_out_candidates)
+                        else:
+                            await self._exclude_timed_out_processors()
+                        batch_wait_started_at = time.monotonic()
+                        continue
                     await asyncio.sleep(0.001)
                     continue
 
-                self._timed_out = False
-                await self._reset_ready_pids()
-                waiting_time = time.time() - timestamp
-                self._logger.debug(f"Time lost waiting {waiting_time} seconds")
-                self._logger.info("Transcribing")
-                timestamp = time.time()
-
-                async with self._register_lock:
-                    current_processors = self._registered_pids.copy()
-                    for pid, processor in self._registered_pids.items():
-                        self.append_audio(pid, processor.asr_processor.audio_buffer)
-
-                loop = asyncio.get_running_loop()
-                results = await loop.run_in_executor(None, self._asr.transcribe_parallel, self._audio_buffer)
-                self._audio_buffer.reset()
-
-                async with self._register_lock:
-                    for processor_id, result in results:
-                        processor = current_processors[processor_id]
-                        processor.asr_processor.update(result)
-                        self._logger.debug(f"Result {processor_id}: {processor.asr_processor.results}")
-
-                self._transcription_event.set()
-                self._last_transcript_time_seconds = time.time() - timestamp
-                self._estimated_transcription_time = (
-                    self._estimated_transcription_time * 0.7 + self._last_transcript_time_seconds * 0.3
-                )
-                self._transcript_timeout_seconds = self._estimated_transcription_time * 2.0
-                timestamp = time.time()
+                waiting_time = 0.0 if batch_wait_started_at is None else time.monotonic() - batch_wait_started_at
+                current_processors = await self._claim_ready_processors()
+                await self._transcribe_current_processors(current_processors, waiting_time)
+                batch_wait_started_at = None
         except Exception as exc:
+            self._loop_failure = exc
+            async with self._register_lock:
+                for process in self._registered_pids.values():
+                    process.transcription_event.set()
             self._logger.exception(exc)

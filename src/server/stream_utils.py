@@ -74,7 +74,7 @@ class ProcessorManager:
             self.processor.insert_audio_chunk(np.array(audio_batch, dtype=np.float32))
 
     async def get_transcription(self):
-        await self._shared_asr.wait()
+        await self._shared_asr.wait(self.id)
 
     def mark_stream_closed(self):
         self._stream_closed_event.set()
