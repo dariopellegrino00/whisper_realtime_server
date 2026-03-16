@@ -228,6 +228,8 @@ Before setting up your own client, it's important to understand the server archi
 
 At the moment the server runs a single shared `ParallelRealtimeASR` backend for all active streams. Each client gets its own stream processor state, but ready processors are grouped into the same shared inference cycle. Two gRPC services are exposed: one returning confirmed transcript segments only, and one returning confirmed segments plus the current hypothesis. With the current protocol, the first streaming message is a config carrying the client `chunk_duration`. In practice, clients connected to the same server instance should use the same `chunk_duration`, and that duration should stay at or below the server `--max-chunk-duration-seconds` limit.
 
+The shared realtime backend expects connected clients to keep the declared chunk cadence. During silence, clients should keep sending silent chunks at the same cadence instead of pausing the stream. If a client stops producing chunks while remaining connected, it may be excluded so that it does not delay the other active streams.
+
 
 ## Credits
 
