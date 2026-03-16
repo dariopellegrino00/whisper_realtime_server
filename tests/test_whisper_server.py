@@ -7,6 +7,8 @@ from types import ModuleType
 import pytest
 from grpc import StatusCode
 
+# We need to mock the gRPC generated modules BEFORE importing the servicer.
+# This prevents ImportErrors since we don't want to rely on the actual protoc-generated files during unit tests.
 fake_generated = ModuleType("src.generated")
 fake_speech_pb2_grpc = ModuleType("src.generated.speech_pb2_grpc")
 fake_speech_pb2 = ModuleType("src.generated.speech_pb2")
@@ -21,19 +23,10 @@ sys.modules.setdefault("src.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
 sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
 
 from src.server.whisper_server import BaseSpeechToTextServicer
+from tests.conftest import AsyncIterator
 
-
-class AbortCalled(Exception):
-    def __init__(self, code, details):
-        self.code = code
-        self.details = details
-        super().__init__(f"{code}: {details}")
-
-
-class FakeContext:
-    async def abort(self, code, details):
-        raise AbortCalled(code, details)
-
+# These mock classes allow us to isolate the gRPC servicer logic without
+# spinning up a real ASR engine or a full network stack.
 
 class FakeProcessorManager:
     def __init__(self, stream_session):
@@ -110,55 +103,48 @@ class FakeServicer(BaseSpeechToTextServicer):
         return None
 
 
-class AsyncIterator:
-    def __init__(self, items):
-        self._items = list(items)
+class HangingIterator:
+    """Iterates first item then hangs indefinitely by waiting on a never-triggered event."""
+    def __init__(self, first_item):
+        self.first_item = first_item
+        self.yielded = False
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        if not self._items:
-            raise StopAsyncIteration
-        return self._items.pop(0)
+        if not self.yielded:
+            self.yielded = True
+            return self.first_item
+        await asyncio.Event().wait()
 
+# Start of tests for the BaseSpeechToTextServicer
 
-class HangingSecondMessageIterator:
-    def __init__(self, first_request):
-        self._first_request = first_request
-        self._used = False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._used:
-            self._used = True
-            return self._first_request
-        await asyncio.sleep(3600)
-
-
-def test_streaming_recognize_times_out_if_first_audio_never_arrives(monkeypatch):
+def test_streaming_recognize_times_out_if_first_audio_never_arrives(monkeypatch, fake_context, abort_exception, run_test):
+    """Verify that the servicer doesn't hang forever if the client stops sending audio."""
     async def scenario():
         stream_session = FakeStreamSession()
         servicer = FakeServicer(stream_session)
-        monkeypatch.setattr(servicer, "_first_audio_timeout_seconds", lambda _stream_session: 0.01)
+        # Force a very short timeout for testing purposes
+        monkeypatch.setattr(servicer, "_first_audio_timeout_seconds", lambda _session: 0.01)
 
-        with pytest.raises(AbortCalled) as excinfo:
+        with pytest.raises(abort_exception) as excinfo:
             async for _ in servicer.StreamingRecognize(
-                HangingSecondMessageIterator(object()), context=FakeContext()
+                HangingIterator(object()), context=fake_context
             ):
                 pass
 
         assert excinfo.value.code is StatusCode.DEADLINE_EXCEEDED
 
-    asyncio.run(scenario())
+    run_test(scenario())
 
 
-def test_streaming_recognize_drains_queued_audio_before_exit():
+def test_streaming_recognize_drains_queued_audio_before_exit(run_test):
+    """Ensure that any pending audio in the queue is processed before closing the stream."""
     async def scenario():
         stream_session = FakeStreamSession()
         servicer = FakeServicer(stream_session)
+        # Simulate a stream with config, first audio, and then more audio chunks
         request_iterator = AsyncIterator([object(), object(), [0.0], [0.1]])
 
         async for _ in servicer.StreamingRecognize(request_iterator, context=None):
@@ -168,4 +154,21 @@ def test_streaming_recognize_drains_queued_audio_before_exit():
         assert stream_session.processor_manager.get_transcription_calls == 1
         assert stream_session.final_response_calls == 0
 
-    asyncio.run(scenario())
+    run_test(scenario())
+
+
+def test_streaming_recognize_transcribes_initial_chunk_before_eof(run_test):
+    """Ensure that we trigger a transcription even if the stream closes immediately after the first chunk."""
+    async def scenario():
+        stream_session = FakeStreamSession()
+        servicer = FakeServicer(stream_session)
+        # Stream closes immediately after sending the initial mandatory chunks
+        request_iterator = AsyncIterator([object(), object()])
+
+        async for _ in servicer.StreamingRecognize(request_iterator, context=None):
+            pass
+
+        assert stream_session.processor_manager.get_transcription_calls == 1
+        assert stream_session.final_response_calls == 0
+
+    run_test(scenario())

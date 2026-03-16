@@ -100,14 +100,19 @@ class BaseSpeechToTextServicer(ABC):
             raise
 
         request_task = asyncio.create_task(stream_session.request_enqueuer(request_iterator, context))
+        has_unsubmitted_audio = True
 
         try:
             async with stream_session.processor_manager.context():
                 while not stream_session.processor_manager.is_finished():
-                    if request_task.done() and stream_session.processor_manager.audio_queue.empty():
+                    if (
+                        request_task.done()
+                        and stream_session.processor_manager.audio_queue.empty()
+                        and not has_unsubmitted_audio
+                    ):
                         break
 
-                    if stream_session.processor_manager.audio_queue.empty():
+                    if stream_session.processor_manager.audio_queue.empty() and not has_unsubmitted_audio:
                         await asyncio.sleep(0.001)
                         continue
 
@@ -116,6 +121,7 @@ class BaseSpeechToTextServicer(ABC):
                     await self._shared_asr.set_processor_ready(id)
                     await stream_session.processor_manager.insert_audio()
                     await stream_session.processor_manager.get_transcription()
+                    has_unsubmitted_audio = False
                     if stream_session.processor_manager.is_finished():
                         break
 
