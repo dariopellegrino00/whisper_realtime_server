@@ -109,12 +109,23 @@ class TranscriptorClient:
             1,
             int(AudioConfig.effective_chunk_duration_seconds() * capture_sample_rate),
         )
-        audio_queue = queue.Queue()
+        audio_queue = queue.Queue(maxsize=100)
 
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print(f"Audio callback status: {status}", file=sys.stderr)
-            audio_queue.put(indata.copy().flatten())
+            chunk = indata.copy().flatten()
+            try:
+                audio_queue.put_nowait(chunk)
+            except queue.Full:
+                try:
+                    audio_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    audio_queue.put_nowait(chunk)
+                except queue.Full:
+                    pass
 
         with sd.InputStream(
             device=sd.default.device[0],
