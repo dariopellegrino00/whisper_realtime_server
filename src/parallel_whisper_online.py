@@ -8,10 +8,98 @@ from types import SimpleNamespace
 from typing import Dict
 
 import numpy as np
+from faster_whisper.vad import (
+    SpeechTimestampsMap,
+    VadOptions,
+    collect_chunks,
+    get_speech_timestamps,
+)
 
 from src.whisper_online import *
 
 DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS = 1.0
+DEFAULT_ASR_BACKEND = "batched"
+DEFAULT_BATCHED_INFERENCE_BATCH_SIZE = 16
+VALID_ASR_BACKENDS = {"batched", "plain"}
+
+
+def resolve_asr_backend(backend=None):
+    if backend is None:
+        backend = os.getenv("USE_BATCHED_INFERENCE")
+
+    if backend is None:
+        return DEFAULT_ASR_BACKEND
+
+    normalized = str(backend).strip().lower()
+    if normalized in VALID_ASR_BACKENDS:
+        return normalized
+    if normalized in {"1", "true", "yes", "on"}:
+        return "batched"
+    if normalized in {"0", "false", "no", "off"}:
+        return "plain"
+
+    raise ValueError(
+        f"Unsupported ASR backend {backend!r}. Expected one of: batched, plain"
+    )
+
+
+class FasterWhisperBackendAdapter:
+    name = None
+
+    def load_model(self, asr, modelsize=None, cache_dir=None, model_dir=None):
+        raise NotImplementedError
+
+    def build_clip_timestamps(self, clip_windows):
+        raise NotImplementedError
+
+    def build_transcribe_kwargs(self):
+        return {}
+
+
+class PlainWhisperBackendAdapter(FasterWhisperBackendAdapter):
+    name = "plain"
+
+    def load_model(self, asr, modelsize=None, cache_dir=None, model_dir=None):
+        return FasterWhisperASR.load_model(asr, modelsize, cache_dir, model_dir)
+
+    def build_clip_timestamps(self, clip_windows):
+        timestamps = []
+        for clip in clip_windows:
+            timestamps.extend([clip["start_seconds"], clip["end_seconds"]])
+        return timestamps
+
+
+class BatchedWhisperBackendAdapter(FasterWhisperBackendAdapter):
+    name = "batched"
+
+    def load_model(self, asr, modelsize=None, cache_dir=None, model_dir=None):
+        from faster_whisper import BatchedInferencePipeline
+
+        model = FasterWhisperASR.load_model(asr, modelsize, cache_dir, model_dir)
+        return BatchedInferencePipeline(model)
+
+    def build_clip_timestamps(self, clip_windows):
+        return [
+            {"start": clip["start_sample"], "end": clip["end_sample"]}
+            for clip in clip_windows
+        ]
+
+    def build_transcribe_kwargs(self):
+        return {
+            "without_timestamps": False,
+            "batch_size": DEFAULT_BATCHED_INFERENCE_BATCH_SIZE,
+        }
+
+
+def create_asr_backend_adapter(backend=None):
+    resolved_backend = resolve_asr_backend(backend)
+    if resolved_backend == "plain":
+        return PlainWhisperBackendAdapter()
+    if resolved_backend == "batched":
+        return BatchedWhisperBackendAdapter()
+    raise ValueError(
+        f"Unsupported ASR backend {resolved_backend!r}. Expected one of: batched, plain"
+    )
 
 
 class ParallelAudioBuffer:
@@ -32,7 +120,9 @@ class ParallelAudioBuffer:
         if audio_length == 0:
             return
 
-        self._segment_times.append({"start": self._audio_size, "end": self._audio_size + audio_length})
+        self._segment_times.append(
+            {"start": self._audio_size, "end": self._audio_size + audio_length}
+        )
         self._ids.append(id)
         self._audio_chunks.append(audio)
         self._audio_chunks.append(np.zeros(100, dtype=np.float32))
@@ -46,17 +136,39 @@ class ParallelAudioBuffer:
         return self._audio_size
 
     def parameters(self):
-        audio = np.concatenate(self._audio_chunks) if self._audio_chunks else np.array([], dtype=np.float32)
-        ns = SimpleNamespace(ids=self._ids, audio=audio, segment_times=self._segment_times)
+        audio = (
+            np.concatenate(self._audio_chunks)
+            if self._audio_chunks
+            else np.array([], dtype=np.float32)
+        )
+        ns = SimpleNamespace(
+            ids=self._ids, audio=audio, segment_times=self._segment_times
+        )
         return copy.deepcopy(ns)
 
 
 class MultiProcessingFasterWhisperASR(FasterWhisperASR):
-    def __init__(self, lan, modelsize=None, cache_dir=None, model_dir=None, logfile=logging.getLogger(__name__)):
+    def __init__(
+        self,
+        lan,
+        modelsize=None,
+        cache_dir=None,
+        model_dir=None,
+        logfile=logging.getLogger(__name__),
+        use_vad=False,
+        backend=None,
+    ):
         self._client_events = []
         self._last_transcript_time = 0.0
         self._log = logfile
+        self._use_vad = use_vad
+        self._vad_options = VadOptions()
+        self._backend_adapter = create_asr_backend_adapter(backend)
         super().__init__(lan, modelsize, cache_dir, model_dir, logfile)
+
+    @property
+    def backend(self):
+        return self._backend_adapter.name
 
     @staticmethod
     def normalize_segment(start, segment):
@@ -64,7 +176,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         for word in segment.words:
             if segment.no_speech_prob > 0.9:
                 continue
-            output.append((round(word.start - start, 5), round(word.end - start, 5), word.word))
+            output.append(
+                (round(word.start - start, 5), round(word.end - start, 5), word.word)
+            )
         return output
 
     def warmup(self, filepath):
@@ -73,44 +187,152 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 audio = load_audio_chunk(filepath, 0, 1)
                 buffer = ParallelAudioBuffer()
                 buffer.append_token(1, audio)
-                self.transcribe_parallel(buffer)
+                # Warm up the model path even when shared VAD would strip the sample.
+                self.transcribe_parallel(buffer, use_vad=False)
                 self._log.info("asr is warmed up")
             else:
                 self._log.info(f"{filepath} not found")
         else:
             self._log.info("no warmup file provided or file not found")
 
+    def _prepare_clip(self, clip_audio, use_vad=None):
+        if use_vad is None:
+            use_vad = self._use_vad
+
+        if not use_vad:
+            return clip_audio, None
+
+        speech_chunks = get_speech_timestamps(clip_audio, self._vad_options)
+        audio_chunks, _ = collect_chunks(clip_audio, speech_chunks)
+        compact_audio = (
+            np.concatenate(audio_chunks)
+            if audio_chunks
+            else np.array([], dtype=np.float32)
+        )
+        timestamp_map = (
+            SpeechTimestampsMap(speech_chunks, OnlineASRProcessor.SAMPLING_RATE)
+            if speech_chunks
+            else None
+        )
+        return compact_audio, timestamp_map
+
+    def _prepare_shared_audio(self, parameters, use_vad=None):
+        sample_rate = OnlineASRProcessor.SAMPLING_RATE
+        shared_buffer = ParallelAudioBuffer()
+        clip_windows = []
+
+        for id, segment in zip(parameters.ids, parameters.segment_times):
+            clip_audio = parameters.audio[segment["start"] : segment["end"]]
+            if len(clip_audio) == 0:
+                continue
+
+            compact_audio, timestamp_map = self._prepare_clip(
+                clip_audio, use_vad=use_vad
+            )
+            if len(compact_audio) == 0:
+                continue
+
+            shared_start_sample = shared_buffer.size
+            shared_buffer.append_token(id, compact_audio)
+            clip_windows.append(
+                {
+                    "id": id,
+                    "start_sample": shared_start_sample,
+                    "end_sample": shared_start_sample + len(compact_audio),
+                    "start_seconds": shared_start_sample / sample_rate,
+                    "end_seconds": (shared_start_sample + len(compact_audio))
+                    / sample_rate,
+                    "timestamp_map": timestamp_map,
+                }
+            )
+
+        return shared_buffer.parameters(), clip_windows
+
+    @staticmethod
+    def _segment_clip(segment, clip_windows):
+        midpoint = (segment.start + segment.end) / 2
+        for clip in clip_windows:
+            if clip["start_seconds"] <= midpoint <= clip["end_seconds"]:
+                return clip
+        return None
+
+    @staticmethod
+    def _restore_word_timestamps(segment, clip):
+        output = []
+        for word in segment.words:
+            if segment.no_speech_prob > 0.9:
+                continue
+
+            local_start = word.start - clip["start_seconds"]
+            local_end = word.end - clip["start_seconds"]
+
+            if clip["timestamp_map"] is None:
+                restored_start = local_start
+                restored_end = local_end
+            else:
+                middle = (local_start + local_end) / 2
+                chunk_index = clip["timestamp_map"].get_chunk_index(middle)
+                restored_start = clip["timestamp_map"].get_original_time(
+                    local_start,
+                    chunk_index,
+                )
+                restored_end = clip["timestamp_map"].get_original_time(
+                    local_end,
+                    chunk_index,
+                )
+
+            output.append((round(restored_start, 5), round(restored_end, 5), word.word))
+        return output
+
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        from faster_whisper import BatchedInferencePipeline
+        return self._backend_adapter.load_model(
+            self, modelsize=modelsize, cache_dir=cache_dir, model_dir=model_dir
+        )
 
-        model = super().load_model(modelsize, cache_dir, model_dir)
-        return BatchedInferencePipeline(model)
+    def _clip_timestamps(self, clip_windows):
+        return self._backend_adapter.build_clip_timestamps(clip_windows)
 
-    def transcribe_parallel(self, audio_buffer: ParallelAudioBuffer):
+    def transcribe_parallel(self, audio_buffer: ParallelAudioBuffer, use_vad=None):
         if not len(audio_buffer):
             return []
 
         parameters = audio_buffer.parameters()
-        timestamp = time.monotonic()
+        shared_parameters, clip_windows = self._prepare_shared_audio(
+            parameters, use_vad=use_vad
+        )
+        if not clip_windows:
+            return []
 
+        timestamp = time.monotonic()
         segments, _ = self.model.transcribe(
-            parameters.audio,
+            shared_parameters.audio,
             beam_size=5,
             condition_on_previous_text=False,
             multilingual=True,
             word_timestamps=True,
-            clip_timestamps=parameters.segment_times,
-            batch_size=16,
+            clip_timestamps=self._clip_timestamps(clip_windows),
+            **self._backend_adapter.build_transcribe_kwargs(),
         )
 
-        segment_list = list(segments)
-        results_tagged = [
-            (id, self.normalize_segment(start, seg))
-            for (id, start, seg) in zip(
-                parameters.ids,
-                [segment["start"] / OnlineASRProcessor.SAMPLING_RATE for segment in parameters.segment_times],
-                segment_list,
+        results_by_id = {clip["id"]: [] for clip in clip_windows}
+        for segment in segments:
+            clip = self._segment_clip(segment, clip_windows)
+            if clip is None:
+                self._log.warning(
+                    "Unable to map segment start=%s end=%s to a shared clip window",
+                    segment.start,
+                    segment.end,
+                )
+                continue
+
+            results_by_id[clip["id"]].extend(
+                self._restore_word_timestamps(segment, clip)
             )
+
+        results_tagged = [
+            (clip["id"], results_by_id[clip["id"]])
+            for clip in clip_windows
+            if results_by_id[clip["id"]]
         ]
 
         self._last_transcript_time = time.monotonic() - timestamp
@@ -183,12 +405,29 @@ class RegisteredProcess:
 
 
 class ParallelRealtimeASR:
-    def __init__(self, modelsize="large-v3-turbo", logger=None, warmup_file=None):
+    def __init__(
+        self,
+        modelsize="large-v3-turbo",
+        cache_dir=None,
+        model_dir=None,
+        logger=None,
+        warmup_file=None,
+        use_vad=False,
+        backend=None,
+    ):
         self._registered_pids: Dict[int, RegisteredProcess] = {}
         self._register_lock = asyncio.Lock()
         self._audio_buffer = ParallelAudioBuffer()
         self._logger = logger if logger is not None else logging.getLogger(__name__)
-        self._asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=self._logger)
+        self._asr = MultiProcessingFasterWhisperASR(
+            "auto",
+            modelsize=modelsize,
+            cache_dir=cache_dir,
+            model_dir=model_dir,
+            logfile=self._logger,
+            use_vad=use_vad,
+            backend=backend,
+        )
         self._stopped = False
         self._loop_task = None
         self._loop_failure = None
@@ -265,7 +504,9 @@ class ParallelRealtimeASR:
     async def _ready_counts(self):
         async with self._register_lock:
             registered_count = len(self._registered_pids)
-            ready_count = sum(1 for proc in self._registered_pids.values() if proc.ready_flag)
+            ready_count = sum(
+                1 for proc in self._registered_pids.values() if proc.ready_flag
+            )
             return ready_count, registered_count
 
     async def _claim_ready_processors(self):
@@ -289,14 +530,22 @@ class ParallelRealtimeASR:
 
     async def _exclude_timed_out_processors(self):
         async with self._register_lock:
-            to_remove = [pid for pid, proc in self._registered_pids.items() if not proc.ready_flag]
+            to_remove = [
+                pid
+                for pid, proc in self._registered_pids.items()
+                if not proc.ready_flag
+            ]
             for pid in to_remove:
                 rp = self._registered_pids[pid]
                 if rp.never_committed_flag:
-                    self._logger.info(f"Processor {pid} is new and not ready, giving grace period.")
+                    self._logger.info(
+                        f"Processor {pid} is new and not ready, giving grace period."
+                    )
                     rp.never_committed_flag = False
                 else:
-                    self._logger.warning(f"Processor {pid} timed out and will be excluded.")
+                    self._logger.warning(
+                        f"Processor {pid} timed out and will be excluded."
+                    )
                     rp.asr_processor.timed_out = True
                     rp.transcription_event.set()
                     self._registered_pids.pop(pid)
@@ -308,7 +557,9 @@ class ParallelRealtimeASR:
                 if process is None or process.ready_flag:
                     continue
                 if process.never_committed_flag:
-                    self._logger.info(f"Processor {pid} is new and not ready, giving grace period.")
+                    self._logger.info(
+                        f"Processor {pid} is new and not ready, giving grace period."
+                    )
                     process.never_committed_flag = False
                     continue
                 self._logger.warning(f"Processor {pid} timed out and will be excluded.")
@@ -338,7 +589,9 @@ class ParallelRealtimeASR:
 
         loop = asyncio.get_running_loop()
         transcription_started_at = time.monotonic()
-        results = await loop.run_in_executor(None, self._asr.transcribe_parallel, self._audio_buffer)
+        results = await loop.run_in_executor(
+            None, self._asr.transcribe_parallel, self._audio_buffer
+        )
         transcription_elapsed = time.monotonic() - transcription_started_at
         self._audio_buffer.reset()
         self._logger.info(
@@ -375,14 +628,23 @@ class ParallelRealtimeASR:
                     if batch_wait_started_at is None:
                         batch_wait_started_at = time.monotonic()
 
-                    if time.monotonic() - batch_wait_started_at >= self._barrier_timeout_seconds():
+                    if (
+                        time.monotonic() - batch_wait_started_at
+                        >= self._barrier_timeout_seconds()
+                    ):
                         self._logger.error("Timeout waiting for transcription")
                         waiting_time = time.monotonic() - batch_wait_started_at
-                        timed_out_candidates = await self._timed_out_processor_candidates()
+                        timed_out_candidates = (
+                            await self._timed_out_processor_candidates()
+                        )
                         current_processors = await self._claim_ready_processors()
                         if current_processors:
-                            await self._transcribe_current_processors(current_processors, waiting_time)
-                            await self._exclude_still_not_ready_processors(timed_out_candidates)
+                            await self._transcribe_current_processors(
+                                current_processors, waiting_time
+                            )
+                            await self._exclude_still_not_ready_processors(
+                                timed_out_candidates
+                            )
                         else:
                             await self._exclude_timed_out_processors()
                         batch_wait_started_at = time.monotonic()
@@ -390,9 +652,15 @@ class ParallelRealtimeASR:
                     await asyncio.sleep(0.001)
                     continue
 
-                waiting_time = 0.0 if batch_wait_started_at is None else time.monotonic() - batch_wait_started_at
+                waiting_time = (
+                    0.0
+                    if batch_wait_started_at is None
+                    else time.monotonic() - batch_wait_started_at
+                )
                 current_processors = await self._claim_ready_processors()
-                await self._transcribe_current_processors(current_processors, waiting_time)
+                await self._transcribe_current_processors(
+                    current_processors, waiting_time
+                )
                 batch_wait_started_at = None
         except Exception as exc:
             self._loop_failure = exc
