@@ -222,6 +222,8 @@ if you followed the `Building with Docker` section and you want to run the clien
    ```
    On Windows, stop the server with `Ctrl+C`. The local server still requires a working CUDA 12 / cuDNN 9 setup, just like the Docker image.
 
+   The server supports both `plain` and `batched` shared ASR backends through `--backend`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the recommended default backend, while `batched` remains available for performance evaluation and further investigation.
+
 ## Documentation
 
 > [!IMPORTANT]

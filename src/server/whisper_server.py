@@ -13,7 +13,7 @@ import grpc
 from grpc import StatusCode, aio
 
 from src.generated import speech_pb2_grpc
-from src.parallel_whisper_online import ParallelRealtimeASR
+from src.parallel_whisper_online import ParallelRealtimeASR, resolve_asr_backend
 from src.server.stream_session import (
     HypothesisWhispStreamSession,
     StandardWhispStreamSession,
@@ -226,11 +226,17 @@ async def serve(args):
         server_logger.error("Max chunk duration must be greater than 0")
         sys.exit(1)
 
-    server_logger.info(f"Using faster-whisper model {args.model}")
+    server_logger.info(
+        "Using faster-whisper model %s with %s backend", args.model, args.backend
+    )
     shared_asr = ParallelRealtimeASR(
         modelsize=args.model,
+        cache_dir=args.model_cache_dir,
+        model_dir=args.model_dir,
         logger=setup_logging("asr", level=log_level),
         warmup_file=args.warmup_file,
+        use_vad=args.vad,
+        backend=args.backend,
     )
     server_logger.info("Model loaded")
 
@@ -396,7 +402,14 @@ def build_parser():
     parser.add_argument(
         "--vad",
         action="store_true",
-        help="Use VAD for the model (unused at the moment)",
+        help="Use faster-whisper VAD before shared transcription to remove internal silence and restore timestamps",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default=resolve_asr_backend(),
+        choices=("batched", "plain"),
+        help="Shared ASR backend to use: batched inference pipeline or plain WhisperModel",
     )
     parser.add_argument(
         "--log-level",

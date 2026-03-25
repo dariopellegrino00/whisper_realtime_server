@@ -98,7 +98,7 @@ def dummy_asr_cls_factory():
     """Returns a factory that creates a Dummy ASR class with configurable behavior."""
     def _create_dummy_asr(results=None, exc=None):
         class DummyASR:
-            def __init__(self, lan=None, modelsize=None, logfile=None):
+            def __init__(self, lan=None, modelsize=None, logfile=None, **kwargs):
                 pass
             def warmup(self, filepath):
                 pass
