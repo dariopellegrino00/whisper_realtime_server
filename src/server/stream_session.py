@@ -41,7 +41,6 @@ class StreamSession(ABC):
     def final_response(self) -> List:
         pass
 
-
 class WhispStreamSession(StreamSession):
     def __init__(self, processor_manager: ProcessorManager, server_logger=None, logger=None):
         super().__init__(processor_manager, server_logger, logger)
@@ -78,13 +77,17 @@ class WhispStreamSession(StreamSession):
                 await self.enqueue_audio_request(request, context)
         except asyncio.CancelledError:
             raise
-        except grpc.RpcError:
+        except grpc.RpcError as exc:
+            if exc.code() == StatusCode.CANCELLED:
+                self.server_logger.info(f"Client disconnected from {self.id}")
             raise
         except Exception as exc:
             self.processor_manager.logger.error(
                 f"Exception in request_enqueuer {self.processor_manager.id}: {exc}"
             )
             raise
+        else:
+            self.server_logger.info(f"Client closed request stream for {self.id}")
         finally:
             self.processor_manager.mark_stream_closed()
 

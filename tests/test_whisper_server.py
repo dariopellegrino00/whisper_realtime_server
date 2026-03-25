@@ -118,6 +118,23 @@ class HangingIterator:
             return self.first_item
         await asyncio.Event().wait()
 
+
+class CancelAfterFirstItemIterator:
+    """Returns the config message, then simulates a client-side cancellation."""
+
+    def __init__(self, first_item):
+        self.first_item = first_item
+        self.yielded = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.yielded:
+            self.yielded = True
+            return self.first_item
+        raise asyncio.CancelledError
+
 # Start of tests for the BaseSpeechToTextServicer
 
 def test_streaming_recognize_times_out_if_first_audio_never_arrives(monkeypatch, fake_context, abort_exception, run_test):
@@ -170,5 +187,44 @@ def test_streaming_recognize_transcribes_initial_chunk_before_eof(run_test):
 
         assert stream_session.processor_manager.get_transcription_calls == 1
         assert stream_session.final_response_calls == 0
+
+    run_test(scenario())
+
+
+def test_streaming_recognize_logs_startup_cancellation_without_claiming_disconnect(
+    run_test, caplog
+):
+    """Ensure startup cancellations are traced without attributing them to the client."""
+
+    async def scenario():
+        stream_session = FakeStreamSession()
+        servicer = FakeServicer(stream_session)
+
+        with pytest.raises(asyncio.CancelledError):
+            with caplog.at_level(logging.INFO, logger="test"):
+                async for _ in servicer.StreamingRecognize(
+                    CancelAfterFirstItemIterator(object()), context=None
+                ):
+                    pass
+
+        assert "RPC cancelled during startup for fake-stream" in caplog.text
+
+    run_test(scenario())
+
+
+def test_streaming_recognize_logs_disconnect_if_client_closes_after_config(run_test, caplog):
+    """Ensure EOF after the config message is still traced as a startup disconnect."""
+
+    async def scenario():
+        stream_session = FakeStreamSession()
+        servicer = FakeServicer(stream_session)
+
+        with caplog.at_level(logging.INFO, logger="test"):
+            async for _ in servicer.StreamingRecognize(
+                AsyncIterator([object()]), context=None
+            ):
+                pass
+
+        assert "Service fake-stream closed before sending the first audio chunk" in caplog.text
 
     run_test(scenario())
