@@ -83,23 +83,32 @@ class BaseSpeechToTextServicer(ABC):
                 )
             except StopAsyncIteration:
                 return
-            await stream_session.consume_initial_audio_request(first_audio_request, context)
+            await stream_session.consume_initial_audio_request(
+                first_audio_request, context
+            )
         except StopAsyncIteration:
             self._main_server_logger.info(f"Service {id} closed prematurely by client")
             return
         except asyncio.TimeoutError:
-            await context.abort(
-                StatusCode.DEADLINE_EXCEEDED,
+            error_message = (
                 f"{id} did not send the first audio chunk within "
                 f"{self._first_audio_timeout_seconds(stream_session):.3f}s",
             )
+            self._main_server_logger.warning(error_message)
+            await context.abort(
+                StatusCode.DEADLINE_EXCEEDED,
+                error_message,
+            )
         except grpc.RpcError:
+            self._main_server_logger.exception(f"gRPC error in {id}")
             raise
         except Exception as exc:
             self._main_server_logger.exception(f"Exception in {id}: {exc}")
             raise
 
-        request_task = asyncio.create_task(stream_session.request_enqueuer(request_iterator, context))
+        request_task = asyncio.create_task(
+            stream_session.request_enqueuer(request_iterator, context)
+        )
         has_unsubmitted_audio = True
 
         try:
@@ -112,7 +121,10 @@ class BaseSpeechToTextServicer(ABC):
                     ):
                         break
 
-                    if stream_session.processor_manager.audio_queue.empty() and not has_unsubmitted_audio:
+                    if (
+                        stream_session.processor_manager.audio_queue.empty()
+                        and not has_unsubmitted_audio
+                    ):
                         await asyncio.sleep(0.001)
                         continue
 
@@ -159,7 +171,10 @@ class HypothesisWhispSpeechToTextServicer(
 async def serve(args):
     log_level_name = args.log_level.upper()
     if log_level_name not in logging._nameToLevel:
-        print("Log level must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL", file=sys.stderr)
+        print(
+            "Log level must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+            file=sys.stderr,
+        )
         sys.exit(1)
     log_level = logging._nameToLevel[log_level_name]
 
@@ -229,7 +244,9 @@ async def serve(args):
         server,
     )
     speech_pb2_grpc.add_SpeechToTextWithHypothesisServicer_to_server(
-        HypothesisWhispSpeechToTextServicer(shared_asr, server_logger, **processor_args),
+        HypothesisWhispSpeechToTextServicer(
+            shared_asr, server_logger, **processor_args
+        ),
         server,
     )
 
@@ -245,23 +262,36 @@ async def serve(args):
         server_logger.info("Shutdown signal received")
         shutdown_event.set()
 
+    wait_for_signal = False
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGINT, _shutdown)
-    loop.add_signal_handler(signal.SIGTERM, _shutdown)
+    try:
+        loop.add_signal_handler(signal.SIGINT, _shutdown)
+        loop.add_signal_handler(signal.SIGTERM, _shutdown)
+        wait_for_signal = True
+    except NotImplementedError:
+        server_logger.info(
+            "Signal handlers are not supported on this platform. Use Ctrl+C to stop the server."
+        )
 
-    await shutdown_event.wait()
+    try:
+        if wait_for_signal:
+            await shutdown_event.wait()
+        else:
+            await server.wait_for_termination()
+    finally:
+        server_logger.info("Stopping ASR...")
+        await shared_asr.stop()
+        server_logger.info("ASR stopped")
 
-    server_logger.info("Stopping ASR...")
-    await shared_asr.stop()
-    server_logger.info("ASR stopped")
-
-    server_logger.info("Stopping gRPC server...")
-    await server.stop(0)
-    server_logger.info("Server stopped")
+        server_logger.info("Stopping gRPC server...")
+        await server.stop(0)
+        server_logger.info("Server stopped")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Argument parser for the whisper-realtme-server")
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Argument parser for the whisper-realtme-server"
+    )
     parser.add_argument(
         "--fallback",
         action="store_true",
@@ -298,28 +328,73 @@ def main():
         help="Maximum chunk duration accepted from a client session config",
     )
 
-    parser.add_argument("--ports", type=int, nargs="+", default=[50051, 50052], help="Ports to run the server on")
-    parser.add_argument("--max-workers", type=int, default=20, help="Max workers for the server")
-    parser.add_argument("--log-every-processor", action="store_true", help="Log every processor in a separate file")
+    parser.add_argument(
+        "--ports",
+        type=int,
+        nargs="+",
+        default=[50051, 50052],
+        help="Ports to run the server on",
+    )
+    parser.add_argument(
+        "--max-workers", type=int, default=20, help="Max workers for the server"
+    )
+    parser.add_argument(
+        "--log-every-processor",
+        action="store_true",
+        help="Log every processor in a separate file",
+    )
 
     parser.add_argument(
         "--model",
         type=str,
         default="large-v3-turbo",
-        choices="tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo".split(","),
+        choices="tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo".split(
+            ","
+        ),
         help="Name size of the Whisper model to use (default: large-v2). The model is automatically downloaded from the model hub if not present in model cache dir",
     )
-    parser.add_argument("--model-cache-dir", type=str, default=None, help="Directory for the whisper model caching")
-    parser.add_argument("--model-dir", type=str, default=None, help="Directory for a custom ct2 whisper model skipping if --model provided")
-    parser.add_argument("--warmup-file", type=str, default="resources/sample1.wav", help="File to warm up the model and speed up the first request")
+    parser.add_argument(
+        "--model-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for the whisper model caching",
+    )
+    parser.add_argument(
+        "--model-dir",
+        type=str,
+        default=None,
+        help="Directory for a custom ct2 whisper model skipping if --model provided",
+    )
+    parser.add_argument(
+        "--warmup-file",
+        type=str,
+        default="resources/sample1.wav",
+        help="File to warm up the model and speed up the first request",
+    )
 
-    parser.add_argument("--lan", type=str, default="en", help="Language for the whisper model to translate to (unused at the moment)")
-    parser.add_argument("--vad", action="store_true", help="Use VAD for the model (unused at the moment)")
+    parser.add_argument(
+        "--lan",
+        type=str,
+        default="en",
+        help="Language for the whisper model to translate to (unused at the moment)",
+    )
+    parser.add_argument(
+        "--vad",
+        action="store_true",
+        help="Use VAD for the model (unused at the moment)",
+    )
     parser.add_argument(
         "--log-level",
         type=str,
         default="DEBUG",
         help="Log level for the server and shared ASR logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
+    return parser
 
-    asyncio.run(serve(parser.parse_args()))
+
+def main():
+    parser = build_parser()
+    try:
+        asyncio.run(serve(parser.parse_args()))
+    except KeyboardInterrupt:
+        pass

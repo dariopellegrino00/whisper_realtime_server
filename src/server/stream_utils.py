@@ -11,16 +11,30 @@ import numpy as np
 from src.parallel_whisper_online import ParallelOnlineASRProcessor
 
 
-def setup_logging(log_name, use_stdout=False, log_folder="server_logs", level=logging.DEBUG):
+def _configure_stdout_utf8():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+def setup_logging(
+    log_name, use_stdout=False, log_folder="server_logs", level=logging.DEBUG
+):
     os.makedirs(log_folder, exist_ok=True)
 
-    log_path = os.path.join(log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{log_name}.log")
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    log_path = os.path.join(
+        log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{log_name}.log"
+    )
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
     logger = logging.getLogger(log_name)
     logger.setLevel(level)
+    logger.handlers.clear()
+    logger.propagate = False
 
-    handlers = [logging.FileHandler(log_path)]
+    handlers = [logging.FileHandler(log_path, encoding="utf-8")]
     if use_stdout:
+        _configure_stdout_utf8()
         handlers.append(logging.StreamHandler(sys.stdout))
     for handler in handlers:
         handler.setLevel(level)
@@ -52,8 +66,14 @@ class ProcessorManager:
         self.kwargs = kwargs
         self.id = id
         self.logger = logger if logger is not None else logging.getLogger(__name__)
-        self.server_logger = server_logger if server_logger is not None else logging.getLogger(__name__)
-        self.processor = ParallelOnlineASRProcessor(asr=shared_asr.asr, logger=self.logger, **self.kwargs)
+        self.server_logger = (
+            server_logger if server_logger is not None else logging.getLogger(__name__)
+        )
+        self.processor = ParallelOnlineASRProcessor(
+            asr=shared_asr.asr,
+            logger=self.logger,
+            **self.kwargs,
+        )
         self.processor.init()
         self.audio_queue = asyncio.Queue()
         self._shared_asr = shared_asr
@@ -61,7 +81,9 @@ class ProcessorManager:
         self._stream_closed_event = asyncio.Event()
         self._registered = False
 
-    async def insert_audio(self, already_collected_chunks: Optional[Iterable[float]] = None):
+    async def insert_audio(
+        self, already_collected_chunks: Optional[Iterable[float]] = None
+    ):
         audio_batch = []
         if already_collected_chunks is not None:
             audio_batch.extend(already_collected_chunks)
@@ -84,7 +106,9 @@ class ProcessorManager:
         if re_init_processor:
             self.processor.init()
         try:
-            while self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set():
+            while (
+                self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set()
+            ):
                 await asyncio.sleep(0.001)
 
             await self._shared_asr.register_processor(self.id, self.processor)

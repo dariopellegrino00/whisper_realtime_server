@@ -85,8 +85,9 @@ Install all dependencies:
 
 2. Generate the pytgon-grpc files for grpc:
    ```bash
-   make proto
+   python scripts/proto.py generate
    ```
+   `make proto` is still available as a wrapper if you prefer it. On Linux, if `python` is not available as a command, use `make proto PYTHON=python3`.
 </details>
 
 ## gRPC client
@@ -126,12 +127,12 @@ if you followed the `Building with Docker` section and you want to run the clien
    ### Running the client
 
    Tf you setup a custom enviroment navigate to the project root directory (see previus step if you want to run the client directly in docker container)
-   
-   The test client provided is linux only compatible, an all OS compatible client is in the works.
+
+   The test client supports live microphone input on Linux and Windows.
    Run the client using your system microphone:
 
       ```bash
-      python3 -m src.client
+      python -m src.client
       ```
 
    All the possible options:
@@ -143,6 +144,7 @@ if you followed the `Building with Docker` section and you want to run the clien
                         stream with
    --interactive        Display transcript updates interactively on a single line
    --chunk-duration     Change the chunk duration (in seconds) for the audio stream
+   --sound-device-id    Select a specific input device for live audio capture
    ```
 
    The first streaming message must be a session config. The client sends `chunk_duration` there, and the server accepts values up to `--max-chunk-duration-seconds` (default `1.0`). In practice, a `chunk_duration` around `0.4s` to `1.0s` works best for this shared realtime setup.
@@ -169,7 +171,7 @@ if you followed the `Building with Docker` section and you want to run the clien
 
    ### Running the server
    ```bash
-   python3 -m src.server <options>
+   python -m src.server <options>
    ```
    The server is running and ready to accept connections. You can later customize the server models, behavior and other options using the command line arguments. Check the `--help` option for more details:
    ```
@@ -218,6 +220,7 @@ if you followed the `Building with Docker` section and you want to run the clien
                         Log level for the server and shared ASR logger (DEBUG,
                         INFO, WARNING, ERROR, CRITICAL)
    ```
+   On Windows, stop the server with `Ctrl+C`. The local server still requires a working CUDA 12 / cuDNN 9 setup, just like the Docker image.
 
 ## Documentation
 
