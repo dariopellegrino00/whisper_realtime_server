@@ -29,7 +29,10 @@ def setup_logging(
     )
     logger = logging.getLogger(log_name)
     logger.setLevel(level)
-    logger.handlers.clear()
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.flush()
+        handler.close()
     logger.propagate = False
 
     handlers = [logging.FileHandler(log_path, encoding="utf-8")]
