@@ -37,10 +37,10 @@ class BaseSpeechToTextServicer(ABC):
         pass
 
     def create_stream_session(self) -> StreamSession:
-        id = self.get_unique_name()
-        logger = self.log_setup(id)
+        stream_id = self.get_unique_name()
+        logger = self.log_setup(stream_id)
         processor_manager = ProcessorManager(
-            id,
+            stream_id,
             self._shared_asr,
             logger=logger,
             server_logger=self._main_server_logger,
@@ -57,9 +57,9 @@ class BaseSpeechToTextServicer(ABC):
         return f"Whisper-service-{next(cls._service_id)}"
 
     @classmethod
-    def log_setup(cls, id):
+    def log_setup(cls, stream_id):
         if cls.log_every_processor:
-            return setup_logging(f"{id}", level=cls._logger_level)
+            return setup_logging(f"{stream_id}", level=cls._logger_level)
         return logging.getLogger(__name__)
 
     @staticmethod
@@ -69,9 +69,9 @@ class BaseSpeechToTextServicer(ABC):
 
     async def StreamingRecognize(self, request_iterator, context):
         stream_session = self.create_stream_session()
-        id = stream_session.id
+        stream_id = stream_session.id
 
-        self._main_server_logger.info(f"Started connection on {id}")
+        self._main_server_logger.info(f"Started connection on {stream_id}")
 
         try:
             first_request = await request_iterator.__anext__()
@@ -82,28 +82,43 @@ class BaseSpeechToTextServicer(ABC):
                     timeout=self._first_audio_timeout_seconds(stream_session),
                 )
             except StopAsyncIteration:
+                self._main_server_logger.info(
+                    f"Service {stream_id} closed before sending the first audio chunk"
+                )
                 return
             await stream_session.consume_initial_audio_request(
                 first_audio_request, context
             )
         except StopAsyncIteration:
-            self._main_server_logger.info(f"Service {id} closed prematurely by client")
+            self._main_server_logger.info(
+                f"Service {stream_id} closed prematurely by client"
+            )
             return
+        except asyncio.CancelledError:
+            self._main_server_logger.info(
+                f"RPC cancelled during startup for {stream_id}"
+            )
+            raise
         except asyncio.TimeoutError:
             error_message = (
-                f"{id} did not send the first audio chunk within "
-                f"{self._first_audio_timeout_seconds(stream_session):.3f}s",
+                f"{stream_id} did not send the first audio chunk within "
+                f"{self._first_audio_timeout_seconds(stream_session):.3f}s"
             )
             self._main_server_logger.warning(error_message)
             await context.abort(
                 StatusCode.DEADLINE_EXCEEDED,
                 error_message,
             )
-        except grpc.RpcError:
-            self._main_server_logger.exception(f"gRPC error in {id}")
+        except grpc.RpcError as exc:
+            if exc.code() == StatusCode.CANCELLED:
+                self._main_server_logger.info(
+                    f"Client disconnected from {stream_id} during startup"
+                )
+            else:
+                self._main_server_logger.exception(f"gRPC error in {stream_id}")
             raise
         except Exception as exc:
-            self._main_server_logger.exception(f"Exception in {id}: {exc}")
+            self._main_server_logger.exception(f"Exception in {stream_id}: {exc}")
             raise
 
         request_task = asyncio.create_task(
@@ -130,7 +145,7 @@ class BaseSpeechToTextServicer(ABC):
 
                     await stream_session.processor_manager.insert_audio()
                     await asyncio.sleep(0.001)
-                    await self._shared_asr.set_processor_ready(id)
+                    await self._shared_asr.set_processor_ready(stream_id)
                     await stream_session.processor_manager.insert_audio()
                     await stream_session.processor_manager.get_transcription()
                     has_unsubmitted_audio = False

@@ -14,6 +14,7 @@ sys.modules.setdefault("src.generated", fake_generated)
 sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
 
 from src.server.stream_session import StandardWhispStreamSession
+from tests.conftest import AsyncIterator
 
 
 class AbortCalled(Exception):
@@ -35,6 +36,7 @@ class FakeProcessorManager:
         self.server_logger = logging.getLogger("test-server")
         self.audio_queue = asyncio.Queue()
         self.inserted_batches = []
+        self.stream_closed_calls = 0
         self.processor = type(
             "Processor",
             (),
@@ -50,7 +52,7 @@ class FakeProcessorManager:
         self.inserted_batches.append(np.array(already_collected_chunks, dtype=np.float32))
 
     def mark_stream_closed(self):
-        return None
+        self.stream_closed_calls += 1
 
 
 class FakeRequest:
@@ -127,5 +129,19 @@ def test_enqueue_audio_request_rejects_oversized_chunk():
         with pytest.raises(AbortCalled) as excinfo:
             await session.enqueue_audio_request(FakeRequest(audio_bytes=oversized), FakeContext())
         assert excinfo.value.code is StatusCode.INVALID_ARGUMENT
+
+    asyncio.run(scenario())
+
+
+def test_request_enqueuer_logs_when_client_closes_request_stream(caplog):
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(FakeRequest(config=500), FakeContext())
+
+        with caplog.at_level(logging.INFO, logger="src.server.stream_session"):
+            await session.request_enqueuer(AsyncIterator([]), FakeContext())
+
+        assert "Client closed request stream for test-stream" in caplog.text
+        assert session.processor_manager.stream_closed_calls == 1
 
     asyncio.run(scenario())
