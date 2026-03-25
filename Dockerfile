@@ -30,11 +30,12 @@ COPY resources /app/resources
 COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
+COPY scripts /app/scripts
 COPY src /app/src
 COPY Makefile /app/
 COPY proto /app/proto
 COPY fix_proto_imports.py /app/
 
-RUN make proto
+RUN python3 /app/scripts/proto.py generate
 
 CMD ["python3", "-u", "-m", "src.server", "--fallback"]
