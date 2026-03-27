@@ -215,14 +215,15 @@ if you followed the `Building with Docker` section and you want to run the clien
                         File to warm up the model and speed up the first request
    --lan LAN             Language for the whisper model to translate to (unused at
                         the moment)
-   --vad                 Use VAD for the model (unused at the moment)
+   --no-vad              Disable the shared VAD preprocessing step before
+                        transcription
    --log-level LOG_LEVEL
                         Log level for the server and shared ASR logger (DEBUG,
                         INFO, WARNING, ERROR, CRITICAL)
    ```
    On Windows, stop the server with `Ctrl+C`. The local server still requires a working CUDA 12 / cuDNN 9 setup, just like the Docker image.
 
-   The server supports both `plain` and `batched` shared ASR backends through `--backend`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the recommended default backend, while `batched` remains available for performance evaluation and further investigation.
+   The server supports both `plain` and `batched` shared ASR backends through `--backend`. Shared VAD preprocessing is enabled by default and can be disabled with `--no-vad`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the current default backend, while `batched` remains available for performance evaluation and further investigation.
 
 ## Documentation
 

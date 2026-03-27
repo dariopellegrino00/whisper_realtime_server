@@ -30,18 +30,19 @@ class DummyModel:
 
 
 @pytest.mark.parametrize(
-    ("backend", "expected_clip_timestamps", "expected_extra_kwargs"),
+    ("backend", "expected_audio_len", "expected_clip_timestamps", "expected_extra_kwargs"),
     [
-        ("plain", [0.0, 2.0], {}),
+        ("plain", 32800, [0.0, 2.0], {}),
         (
             "batched",
+            32100,
             [{"start": 0, "end": 32000}],
             {"without_timestamps": False, "batch_size": 16},
         ),
     ],
 )
 def test_transcribe_parallel_restores_original_timestamps_when_vad_enabled(
-    monkeypatch, backend, expected_clip_timestamps, expected_extra_kwargs
+    monkeypatch, backend, expected_audio_len, expected_clip_timestamps, expected_extra_kwargs
 ):
     dummy_model = DummyModel(
         [
@@ -93,7 +94,7 @@ def test_transcribe_parallel_restores_original_timestamps_when_vad_enabled(
     ]
     assert dummy_model.calls == [
         {
-            "audio_len": 32100,
+            "audio_len": expected_audio_len,
             "kwargs": {
                 "beam_size": 5,
                 "condition_on_previous_text": False,
@@ -107,18 +108,19 @@ def test_transcribe_parallel_restores_original_timestamps_when_vad_enabled(
 
 
 @pytest.mark.parametrize(
-    ("backend", "expected_clip_timestamps", "expected_extra_kwargs"),
+    ("backend", "expected_audio_len", "expected_clip_timestamps", "expected_extra_kwargs"),
     [
-        ("plain", [0.0, 5.0], {}),
+        ("plain", 80800, [0.0, 5.0], {}),
         (
             "batched",
+            80100,
             [{"start": 0, "end": 80000}],
             {"without_timestamps": False, "batch_size": 16},
         ),
     ],
 )
 def test_transcribe_parallel_keeps_compact_timestamps_when_vad_disabled(
-    monkeypatch, backend, expected_clip_timestamps, expected_extra_kwargs
+    monkeypatch, backend, expected_audio_len, expected_clip_timestamps, expected_extra_kwargs
 ):
     dummy_model = DummyModel(
         [
@@ -162,7 +164,7 @@ def test_transcribe_parallel_keeps_compact_timestamps_when_vad_disabled(
     ]
     assert dummy_model.calls == [
         {
-            "audio_len": 80100,
+            "audio_len": expected_audio_len,
             "kwargs": {
                 "beam_size": 5,
                 "condition_on_previous_text": False,
@@ -199,7 +201,7 @@ def test_warmup_bypasses_vad_so_it_always_runs_one_inference(monkeypatch):
 
     assert dummy_model.calls == [
         {
-            "audio_len": 16100,
+            "audio_len": 16800,
             "kwargs": {
                 "beam_size": 5,
                 "condition_on_previous_text": False,

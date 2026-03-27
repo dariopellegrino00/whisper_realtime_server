@@ -18,8 +18,10 @@ from faster_whisper.vad import (
 from src.whisper_online import *
 
 DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS = 1.0
-DEFAULT_ASR_BACKEND = "batched"
+DEFAULT_ASR_BACKEND = "plain"
 DEFAULT_BATCHED_INFERENCE_BATCH_SIZE = 16
+DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES = 100
+DEFAULT_PLAIN_BACKEND_CLIP_SEPARATOR_SAMPLES = 800
 VALID_ASR_BACKENDS = {"batched", "plain"}
 
 
@@ -55,6 +57,9 @@ class FasterWhisperBackendAdapter:
     def build_transcribe_kwargs(self):
         return {}
 
+    def separator_samples(self):
+        return DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES
+
 
 class PlainWhisperBackendAdapter(FasterWhisperBackendAdapter):
     name = "plain"
@@ -67,6 +72,9 @@ class PlainWhisperBackendAdapter(FasterWhisperBackendAdapter):
         for clip in clip_windows:
             timestamps.extend([clip["start_seconds"], clip["end_seconds"]])
         return timestamps
+
+    def separator_samples(self):
+        return DEFAULT_PLAIN_BACKEND_CLIP_SEPARATOR_SAMPLES
 
 
 class BatchedWhisperBackendAdapter(FasterWhisperBackendAdapter):
@@ -103,11 +111,14 @@ def create_asr_backend_adapter(backend=None):
 
 
 class ParallelAudioBuffer:
-    def __init__(self):
+    def __init__(
+        self, separator_samples=DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES
+    ):
         self._audio_chunks = []
         self._audio_size = 0
         self._segment_times = []
         self._ids = []
+        self._separator_samples = separator_samples
 
     def reset(self):
         self._audio_chunks = []
@@ -125,8 +136,10 @@ class ParallelAudioBuffer:
         )
         self._ids.append(id)
         self._audio_chunks.append(audio)
-        self._audio_chunks.append(np.zeros(100, dtype=np.float32))
-        self._audio_size += audio_length + 100
+        self._audio_chunks.append(
+            np.zeros(self._separator_samples, dtype=np.float32)
+        )
+        self._audio_size += audio_length + self._separator_samples
 
     @property
     def size(self):
@@ -218,7 +231,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
     def _prepare_shared_audio(self, parameters, use_vad=None):
         sample_rate = OnlineASRProcessor.SAMPLING_RATE
-        shared_buffer = ParallelAudioBuffer()
+        shared_buffer = ParallelAudioBuffer(
+            separator_samples=self._backend_adapter.separator_samples()
+        )
         clip_windows = []
 
         for id, segment in zip(parameters.ids, parameters.segment_times):

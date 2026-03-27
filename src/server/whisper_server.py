@@ -227,7 +227,10 @@ async def serve(args):
         sys.exit(1)
 
     server_logger.info(
-        "Using faster-whisper model %s with %s backend", args.model, args.backend
+        "Using faster-whisper model %s with %s backend (vad=%s)",
+        args.model,
+        args.backend,
+        "on" if args.vad else "off",
     )
     shared_asr = ParallelRealtimeASR(
         modelsize=args.model,
@@ -399,10 +402,12 @@ def build_parser():
         default="en",
         help="Language for the whisper model to translate to (unused at the moment)",
     )
+    parser.set_defaults(vad=True)
     parser.add_argument(
-        "--vad",
-        action="store_true",
-        help="Use faster-whisper VAD before shared transcription to remove internal silence and restore timestamps",
+        "--no-vad",
+        dest="vad",
+        action="store_false",
+        help="Disable the shared VAD preprocessing step before transcription",
     )
     parser.add_argument(
         "--backend",

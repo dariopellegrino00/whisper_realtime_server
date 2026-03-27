@@ -22,7 +22,7 @@ sys.modules.setdefault("src.generated", fake_generated)
 sys.modules.setdefault("src.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
 sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
 
-from src.server.whisper_server import BaseSpeechToTextServicer
+from src.server.whisper_server import BaseSpeechToTextServicer, build_parser
 from tests.conftest import AsyncIterator
 
 # These mock classes allow us to isolate the gRPC servicer logic without
@@ -228,3 +228,15 @@ def test_streaming_recognize_logs_disconnect_if_client_closes_after_config(run_t
         assert "Service fake-stream closed before sending the first audio chunk" in caplog.text
 
     run_test(scenario())
+
+
+def test_build_parser_enables_vad_by_default():
+    args = build_parser().parse_args([])
+
+    assert args.vad is True
+
+
+def test_build_parser_disables_vad_with_no_vad_flag():
+    args = build_parser().parse_args(["--no-vad"])
+
+    assert args.vad is False
