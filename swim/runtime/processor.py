@@ -50,9 +50,7 @@ class OnlineASRProcessor:
             prompt.append(word)
 
         non_prompt = self.commited[k:]
-        return self.asr.sep.join(prompt[::-1]), self.asr.sep.join(
-            text for _, _, text in non_prompt
-        )
+        return self.asr.sep.join(prompt[::-1]), self.asr.sep.join(text for _, _, text in non_prompt)
 
     def process_iter(self):
         prompt, non_prompt = self.prompt()
@@ -175,9 +173,9 @@ class OnlineASRProcessor:
 
 
 class ParallelOnlineASRProcessor(OnlineASRProcessor):
-    def __init__(self, asr, logger=logging.getLogger(__name__), **kwargs):
+    def __init__(self, asr, logger=None, **kwargs):
         super().__init__(asr, **kwargs)
-        self.logger = logger
+        self.logger = logger if logger is not None else logging.getLogger(__name__)
         self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15)
         self._result = None
         self._hypothesis = None
@@ -222,9 +220,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         k = len(self.commited) - 1
         if self.buffer_time_seconds > self.buffer_trimming_sec and k >= 0:
             limit = (
-                self.buffer_time_offset
-                + self.buffer_time_seconds
-                - (self.buffer_trimming_sec / 2)
+                self.buffer_time_offset + self.buffer_time_seconds - (self.buffer_trimming_sec / 2)
             )
             while k > 0 and self.commited[k][1] > limit:
                 k -= 1
@@ -241,4 +237,3 @@ __all__ = [
     "OnlineASRProcessor",
     "ParallelOnlineASRProcessor",
 ]
-

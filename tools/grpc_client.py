@@ -36,7 +36,14 @@ class AudioConfig:
 
 # gRPC client for transcription
 class TranscriptorClient:
-    def __init__(self, host: str, port: int, with_hypothesis: bool = False, simulate_filepath: str = "", interactive: bool = False):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        with_hypothesis: bool = False,
+        simulate_filepath: str = "",
+        interactive: bool = False,
+    ):
         self.host = host
         self.port = port
         self.with_hypothesis = with_hypothesis
@@ -89,10 +96,7 @@ class TranscriptorClient:
         except sd.PortAudioError as exc:
             if native_sample_rate == AudioConfig.sample_rate:
                 raise
-            print(
-                "Falling back to native microphone sample rate "
-                f"{native_sample_rate} Hz: {exc}"
-            )
+            print(f"Falling back to native microphone sample rate {native_sample_rate} Hz: {exc}")
 
         yield from self._generate_audio_chunks_live_stream(
             capture_sample_rate=native_sample_rate,
@@ -225,7 +229,9 @@ class TranscriptorClient:
                             print(response.text, end="", flush=True)
                         last_resp_time = response.end_time_millis
                     else:
-                        print(f"Received transcription: {response.start_time_millis} {response.end_time_millis} {response.text}")
+                        print(
+                            f"Received transcription: {response.start_time_millis} {response.end_time_millis} {response.text}"
+                        )
             except grpc.RpcError as e:
                 print("gRPC Error:", e)
             finally:
@@ -280,8 +286,12 @@ class TranscriptorClient:
                 for response in responses:
                     confirmed = response.confirmed
                     hypothesis = response.hypothesis
-                    print(f"Confirmed: {confirmed.start_time_millis} {confirmed.end_time_millis} \033[92m{confirmed.text}\033[00m")
-                    print(f"Hypothesis: {hypothesis.start_time_millis} {hypothesis.end_time_millis} \033[91m{hypothesis.text}\033[00m\n")
+                    print(
+                        f"Confirmed: {confirmed.start_time_millis} {confirmed.end_time_millis} \033[92m{confirmed.text}\033[00m"
+                    )
+                    print(
+                        f"Hypothesis: {hypothesis.start_time_millis} {hypothesis.end_time_millis} \033[91m{hypothesis.text}\033[00m\n"
+                    )
 
         except grpc.RpcError as e:
             print("gRPC Error:", e)
@@ -291,9 +301,7 @@ class TranscriptorClient:
 
 def main():
     parser = argparse.ArgumentParser(description="gRPC Transcriptor Client")
-    parser.add_argument(
-        "--host", type=str, default="localhost", help="gRPC server address"
-    )
+    parser.add_argument("--host", type=str, default="localhost", help="gRPC server address")
     parser.add_argument("--port", type=int, default=50051, help="gRPC server port")
     parser.add_argument(
         "--with-hypothesis",
@@ -332,7 +340,13 @@ def main():
         args.sound_device_id if args.sound_device_id is not None else sd.default.device
     )
 
-    client = TranscriptorClient(host=args.host, port=args.port, with_hypothesis=args.with_hypothesis, simulate_filepath=args.simulate, interactive=args.interactive)
+    client = TranscriptorClient(
+        host=args.host,
+        port=args.port,
+        with_hypothesis=args.with_hypothesis,
+        simulate_filepath=args.simulate,
+        interactive=args.interactive,
+    )
     client.run()
 
 

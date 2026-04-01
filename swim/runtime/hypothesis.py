@@ -44,12 +44,8 @@ class HypothesisBuffer:
 
         committed_length = len(self.commited_in_buffer)
         new_length = len(self.new)
-        for ngram_size in range(
-            min(committed_length, new_length, MAX_DEDUP_NGRAM_SIZE), 0, -1
-        ):
-            committed_tail = " ".join(
-                word[2] for word in self.commited_in_buffer[-ngram_size:]
-            )
+        for ngram_size in range(min(committed_length, new_length, MAX_DEDUP_NGRAM_SIZE), 0, -1):
+            committed_tail = " ".join(word[2] for word in self.commited_in_buffer[-ngram_size:])
             new_head = " ".join(word[2] for word in self.new[:ngram_size])
             if (
                 fuzz.QRatio(
@@ -83,8 +79,7 @@ class HypothesisBuffer:
 
         half = len(self.buffer) // 2
         prefixes = [
-            " ".join(word[-1] for word in self.buffer[: index + 1])
-            for index in range(half + 1)
+            " ".join(word[-1] for word in self.buffer[: index + 1]) for index in range(half + 1)
         ]
 
         max_score = 0
@@ -150,4 +145,3 @@ __all__ = [
     "HypothesisBuffer",
     "MAX_DEDUP_NGRAM_SIZE",
 ]
-

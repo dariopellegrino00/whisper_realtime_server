@@ -19,16 +19,15 @@ fake_speech_pb2_grpc.SpeechToTextWithHypothesisServicer = type(
 fake_generated.speech_pb2_grpc = fake_speech_pb2_grpc
 fake_generated.speech_pb2 = fake_speech_pb2
 sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
-sys.modules.setdefault(
-    "swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc
-)
+sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 
-from swim.transports.grpc.server import BaseSpeechToTextServicer, build_parser
-from tests.conftest import AsyncIterator
+from swim.transports.grpc.server import BaseSpeechToTextServicer, build_parser  # noqa: E402
+from tests.conftest import AsyncIterator  # noqa: E402
 
 # These mock classes allow us to isolate the gRPC servicer logic without
 # spinning up a real ASR engine or a full network stack.
+
 
 class FakeProcessorManager:
     def __init__(self, stream_session):
@@ -107,6 +106,7 @@ class FakeServicer(BaseSpeechToTextServicer):
 
 class HangingIterator:
     """Iterates first item then hangs indefinitely by waiting on a never-triggered event."""
+
     def __init__(self, first_item):
         self.first_item = first_item
         self.yielded = False
@@ -137,10 +137,15 @@ class CancelAfterFirstItemIterator:
             return self.first_item
         raise asyncio.CancelledError
 
+
 # Start of tests for the BaseSpeechToTextServicer
 
-def test_streaming_recognize_times_out_if_first_audio_never_arrives(monkeypatch, fake_context, abort_exception, run_test):
+
+def test_streaming_recognize_times_out_if_first_audio_never_arrives(
+    monkeypatch, fake_context, abort_exception, run_test
+):
     """Verify that the servicer doesn't hang forever if the client stops sending audio."""
+
     async def scenario():
         stream_session = FakeStreamSession()
         servicer = FakeServicer(stream_session)
@@ -160,6 +165,7 @@ def test_streaming_recognize_times_out_if_first_audio_never_arrives(monkeypatch,
 
 def test_streaming_recognize_drains_queued_audio_before_exit(run_test):
     """Ensure that any pending audio in the queue is processed before closing the stream."""
+
     async def scenario():
         stream_session = FakeStreamSession()
         servicer = FakeServicer(stream_session)
@@ -178,6 +184,7 @@ def test_streaming_recognize_drains_queued_audio_before_exit(run_test):
 
 def test_streaming_recognize_transcribes_initial_chunk_before_eof(run_test):
     """Ensure that we trigger a transcription even if the stream closes immediately after the first chunk."""
+
     async def scenario():
         stream_session = FakeStreamSession()
         servicer = FakeServicer(stream_session)
@@ -222,9 +229,7 @@ def test_streaming_recognize_logs_disconnect_if_client_closes_after_config(run_t
         servicer = FakeServicer(stream_session)
 
         with caplog.at_level(logging.INFO, logger="test"):
-            async for _ in servicer.StreamingRecognize(
-                AsyncIterator([object()]), context=None
-            ):
+            async for _ in servicer.StreamingRecognize(AsyncIterator([object()]), context=None):
                 pass
 
         assert "Service fake-stream closed before sending the first audio chunk" in caplog.text

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "swim"
 version = "0.1.0"
 description = "A Python package for the SWIM experimental framework."
-requires-python = ">=3.10" # TODO: Verify this version requirement i used 3.10 at least based on the actual code
+requires-python = ">=3.10"
 dependencies = [
     "faster-whisper==1.1.1",
     "librosa==0.11.0",
@@ -22,6 +22,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8,<9",
+    "ruff",
+    "mypy",
+    "types-protobuf",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -36,24 +39,44 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["swim/transports/grpc/generated"]
+
+[tool.ruff.format]
+docstring-code-format = false
 
 [tool.ruff.lint]
-select = [ #TODO: Verify which rules we want to enable, this is just a starting point based on common practice
+select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
     "W",   # pycodestyle warnings
     "B",   # flake8-bugbear
     "I",   # isort
     "UP",  # pyupgrade
-    "SIM", # simplify
-    "RUF", # regole native Ruff
+]
+ignore = [
+    # With ruff format enabled, long-line lint tends to duplicate formatter decisions.
+    "E501",
 ]
 
-#TODO: Verify which rules we want to enable and how
 [tool.mypy]
 python_version = "3.10"
-strict = true # or true?
+files = ["swim", "scripts"]
 warn_unused_ignores = true 
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["swim.transports.grpc.generated.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "faster_whisper",
+    "faster_whisper.*",
+    "grpc",
+    "grpc.*",
+    "librosa",
+    "rapidfuzz",
+    "rapidfuzz.*",
+]
+ignore_missing_imports = true

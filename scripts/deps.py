@@ -6,7 +6,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
 LOCKFILE = ROOT / "uv.lock"
@@ -18,16 +17,22 @@ def _run(*args: str) -> None:
 
 
 def _export_requirements(output_file: Path) -> None:
-    _run(
-        "uv",
-        "export",
-        "--frozen",
-        "--no-header",
-        "--no-emit-project",
-        "--format",
-        "requirements.txt",
-        "--output-file",
-        str(output_file),
+    subprocess.run(
+        [
+            "uv",
+            "export",
+            "--frozen",
+            "--no-dev",
+            "--no-header",
+            "--no-emit-project",
+            "--format",
+            "requirements.txt",
+            "--output-file",
+            str(output_file),
+        ],
+        check=True,
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
     )
 
 
@@ -45,7 +50,9 @@ def check() -> int:
         print("uv.lock not found; run `python scripts/deps.py sync` first", file=sys.stderr)
         return 1
     if not REQUIREMENTS.exists():
-        print("requirements.txt not found; run `python scripts/deps.py sync` first", file=sys.stderr)
+        print(
+            "requirements.txt not found; run `python scripts/deps.py sync` first", file=sys.stderr
+        )
         return 1
 
     with tempfile.TemporaryDirectory() as tmpdir:

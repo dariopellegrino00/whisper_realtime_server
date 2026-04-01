@@ -185,7 +185,9 @@ def test_warmup_bypasses_vad_so_it_always_runs_one_inference(monkeypatch):
         "load_model",
         lambda self, modelsize=None, cache_dir=None, model_dir=None: dummy_model,
     )
-    monkeypatch.setattr(pwo, "load_audio_chunk", lambda filepath, beg, end: np.zeros(16000, dtype=np.float32))
+    monkeypatch.setattr(
+        pwo, "load_audio_chunk", lambda filepath, beg, end: np.zeros(16000, dtype=np.float32)
+    )
     monkeypatch.setattr(pwo, "get_speech_timestamps", lambda audio, _options: [])
     monkeypatch.setattr(pwo.os.path, "isfile", lambda filepath: True)
 

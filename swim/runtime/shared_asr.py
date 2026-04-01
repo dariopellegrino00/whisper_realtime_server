@@ -5,7 +5,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict
 
 import numpy as np
 from faster_whisper.vad import (
@@ -42,13 +41,11 @@ def resolve_asr_backend(backend=None):
     if normalized in {"0", "false", "no", "off"}:
         return "plain"
 
-    raise ValueError(
-        f"Unsupported ASR backend {backend!r}. Expected one of: batched, plain"
-    )
+    raise ValueError(f"Unsupported ASR backend {backend!r}. Expected one of: batched, plain")
 
 
 class FasterWhisperBackendAdapter:
-    name = None
+    name: str | None = None
 
     def load_model(self, asr, modelsize=None, cache_dir=None, model_dir=None):
         raise NotImplementedError
@@ -89,10 +86,7 @@ class BatchedWhisperBackendAdapter(FasterWhisperBackendAdapter):
         return BatchedInferencePipeline(model)
 
     def build_clip_timestamps(self, clip_windows):
-        return [
-            {"start": clip["start_sample"], "end": clip["end_sample"]}
-            for clip in clip_windows
-        ]
+        return [{"start": clip["start_sample"], "end": clip["end_sample"]} for clip in clip_windows]
 
     def build_transcribe_kwargs(self):
         return {
@@ -113,9 +107,7 @@ def create_asr_backend_adapter(backend=None):
 
 
 class ParallelAudioBuffer:
-    def __init__(
-        self, separator_samples=DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES
-    ):
+    def __init__(self, separator_samples=DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES):
         self._audio_chunks = []
         self._audio_size = 0
         self._segment_times = []
@@ -154,9 +146,7 @@ class ParallelAudioBuffer:
             if self._audio_chunks
             else np.array([], dtype=np.float32)
         )
-        ns = SimpleNamespace(
-            ids=self._ids, audio=audio, segment_times=self._segment_times
-        )
+        ns = SimpleNamespace(ids=self._ids, audio=audio, segment_times=self._segment_times)
         return copy.deepcopy(ns)
 
 
@@ -167,17 +157,17 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         modelsize=None,
         cache_dir=None,
         model_dir=None,
-        logfile=logging.getLogger(__name__),
+        logfile=None,
         use_vad=False,
         backend=None,
     ):
         self._client_events = []
         self._last_transcript_time = 0.0
-        self._log = logfile
+        self._log = logfile if logfile is not None else logging.getLogger(__name__)
         self._use_vad = use_vad
         self._vad_options = VadOptions()
         self._backend_adapter = create_asr_backend_adapter(backend)
-        super().__init__(lan, modelsize, cache_dir, model_dir, logfile)
+        super().__init__(lan, modelsize, cache_dir, model_dir, self._log)
 
     @property
     def backend(self):
@@ -189,9 +179,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         for word in segment.words:
             if segment.no_speech_prob > 0.9:
                 continue
-            output.append(
-                (round(word.start - start, 5), round(word.end - start, 5), word.word)
-            )
+            output.append((round(word.start - start, 5), round(word.end - start, 5), word.word))
         return output
 
     def warmup(self, filepath):
@@ -217,9 +205,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         speech_chunks = get_speech_timestamps(clip_audio, self._vad_options)
         audio_chunks, _chunks_metadata = collect_chunks(clip_audio, speech_chunks)
         compact_audio = (
-            np.concatenate(audio_chunks)
-            if audio_chunks
-            else np.array([], dtype=np.float32)
+            np.concatenate(audio_chunks) if audio_chunks else np.array([], dtype=np.float32)
         )
         timestamp_map = (
             SpeechTimestampsMap(
@@ -239,14 +225,12 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         )
         clip_windows = []
 
-        for processor_id, segment in zip(parameters.ids, parameters.segment_times):
+        for processor_id, segment in zip(parameters.ids, parameters.segment_times, strict=True):
             clip_audio = parameters.audio[segment["start"] : segment["end"]]
             if len(clip_audio) == 0:
                 continue
 
-            compact_audio, timestamp_map = self._prepare_clip(
-                clip_audio, use_vad=use_vad
-            )
+            compact_audio, timestamp_map = self._prepare_clip(clip_audio, use_vad=use_vad)
             if len(compact_audio) == 0:
                 continue
 
@@ -258,8 +242,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                     "start_sample": shared_start_sample,
                     "end_sample": shared_start_sample + len(compact_audio),
                     "start_seconds": shared_start_sample / sample_rate,
-                    "end_seconds": (shared_start_sample + len(compact_audio))
-                    / sample_rate,
+                    "end_seconds": (shared_start_sample + len(compact_audio)) / sample_rate,
                     "timestamp_map": timestamp_map,
                 }
             )
@@ -315,9 +298,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             return []
 
         parameters = audio_buffer.parameters()
-        shared_parameters, clip_windows = self._prepare_shared_audio(
-            parameters, use_vad=use_vad
-        )
+        shared_parameters, clip_windows = self._prepare_shared_audio(parameters, use_vad=use_vad)
         if not clip_windows:
             return []
 
@@ -332,7 +313,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             **self._backend_adapter.build_transcribe_kwargs(),
         )
 
-        results_by_id = {clip["id"]: [] for clip in clip_windows}
+        results_by_id: dict[object, list[tuple[float, float, str]]] = {
+            clip["id"]: [] for clip in clip_windows
+        }
         for segment in segments:
             clip = self._segment_clip(segment, clip_windows)
             if clip is None:
@@ -343,9 +326,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 )
                 continue
 
-            results_by_id[clip["id"]].extend(
-                self._restore_word_timestamps(segment, clip)
-            )
+            results_by_id[clip["id"]].extend(self._restore_word_timestamps(segment, clip))
 
         results_tagged = [
             (clip["id"], results_by_id[clip["id"]])
@@ -378,7 +359,7 @@ class ParallelRealtimeASR:
         use_vad=False,
         backend=None,
     ):
-        self._registered_pids: Dict[object, RegisteredProcess] = {}
+        self._registered_pids: dict[object, RegisteredProcess] = {}
         self._register_lock = asyncio.Lock()
         self._audio_buffer = ParallelAudioBuffer()
         self._logger = logger if logger is not None else logging.getLogger(__name__)
@@ -467,9 +448,7 @@ class ParallelRealtimeASR:
     async def _ready_counts(self):
         async with self._register_lock:
             registered_count = len(self._registered_pids)
-            ready_count = sum(
-                1 for proc in self._registered_pids.values() if proc.ready_flag
-            )
+            ready_count = sum(1 for proc in self._registered_pids.values() if proc.ready_flag)
             return ready_count, registered_count
 
     async def _claim_ready_processors(self):
@@ -569,9 +548,7 @@ class ParallelRealtimeASR:
             transcription_elapsed,
         )
 
-        results_by_id = {
-            processor_id: result for processor_id, result in results
-        }
+        results_by_id = {processor_id: result for processor_id, result in results}
         for processor_id, processor in current_processors.items():
             result = results_by_id.get(processor_id, [])
             processor.update(result)
@@ -598,23 +575,16 @@ class ParallelRealtimeASR:
                     if batch_wait_started_at is None:
                         batch_wait_started_at = time.monotonic()
 
-                    if (
-                        time.monotonic() - batch_wait_started_at
-                        >= self._barrier_timeout_seconds()
-                    ):
+                    if time.monotonic() - batch_wait_started_at >= self._barrier_timeout_seconds():
                         self._logger.error("Timeout waiting for transcription")
                         waiting_time = time.monotonic() - batch_wait_started_at
-                        timed_out_candidates = (
-                            await self._timed_out_processor_candidates()
-                        )
+                        timed_out_candidates = await self._timed_out_processor_candidates()
                         current_processors = await self._claim_ready_processors()
                         if current_processors:
                             await self._transcribe_current_processors(
                                 current_processors, waiting_time
                             )
-                            await self._exclude_still_not_ready_processors(
-                                timed_out_candidates
-                            )
+                            await self._exclude_still_not_ready_processors(timed_out_candidates)
                         else:
                             await self._exclude_timed_out_processors()
                         batch_wait_started_at = time.monotonic()
@@ -628,9 +598,7 @@ class ParallelRealtimeASR:
                     else time.monotonic() - batch_wait_started_at
                 )
                 current_processors = await self._claim_ready_processors()
-                await self._transcribe_current_processors(
-                    current_processors, waiting_time
-                )
+                await self._transcribe_current_processors(current_processors, waiting_time)
                 batch_wait_started_at = None
         except Exception as exc:
             self._loop_failure = exc

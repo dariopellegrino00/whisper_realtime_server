@@ -7,7 +7,6 @@ import signal
 import sys
 from abc import ABC, abstractmethod
 from concurrent import futures
-from typing import Type
 
 import grpc
 from grpc import StatusCode, aio
@@ -33,7 +32,7 @@ class BaseSpeechToTextServicer(ABC):
         self._kwargs = kwargs
 
     @abstractmethod
-    def StreamSessionType(self) -> Type[StreamSession]:
+    def StreamSessionType(self) -> type[StreamSession]:
         pass
 
     def create_stream_session(self) -> StreamSession:
@@ -86,18 +85,12 @@ class BaseSpeechToTextServicer(ABC):
                     f"Service {stream_id} closed before sending the first audio chunk"
                 )
                 return
-            await stream_session.consume_initial_audio_request(
-                first_audio_request, context
-            )
+            await stream_session.consume_initial_audio_request(first_audio_request, context)
         except StopAsyncIteration:
-            self._main_server_logger.info(
-                f"Service {stream_id} closed prematurely by client"
-            )
+            self._main_server_logger.info(f"Service {stream_id} closed prematurely by client")
             return
         except asyncio.CancelledError:
-            self._main_server_logger.info(
-                f"RPC cancelled during startup for {stream_id}"
-            )
+            self._main_server_logger.info(f"RPC cancelled during startup for {stream_id}")
             raise
         except asyncio.TimeoutError:
             error_message = (
@@ -172,14 +165,14 @@ class BaseSpeechToTextServicer(ABC):
 class StandardWhispSpeechToTextServicer(
     BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer
 ):
-    def StreamSessionType(self) -> Type[StreamSession]:
+    def StreamSessionType(self) -> type[StreamSession]:
         return StandardWhispStreamSession
 
 
 class HypothesisWhispSpeechToTextServicer(
     BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextWithHypothesisServicer
 ):
-    def StreamSessionType(self) -> Type[StreamSession]:
+    def StreamSessionType(self) -> type[StreamSession]:
         return HypothesisWhispStreamSession
 
 
@@ -268,9 +261,7 @@ async def serve(args):
         server,
     )
     speech_pb2_grpc.add_SpeechToTextWithHypothesisServicer_to_server(
-        HypothesisWhispSpeechToTextServicer(
-            shared_asr, server_logger, **processor_args
-        ),
+        HypothesisWhispSpeechToTextServicer(shared_asr, server_logger, **processor_args),
         server,
     )
 
@@ -313,9 +304,7 @@ async def serve(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Argument parser for the whisper-realtme-server"
-    )
+    parser = argparse.ArgumentParser(description="Argument parser for the whisper-realtme-server")
     parser.add_argument(
         "--fallback",
         action="store_true",
@@ -359,9 +348,7 @@ def build_parser():
         default=[50051, 50052],
         help="Ports to run the server on",
     )
-    parser.add_argument(
-        "--max-workers", type=int, default=20, help="Max workers for the server"
-    )
+    parser.add_argument("--max-workers", type=int, default=20, help="Max workers for the server")
     parser.add_argument(
         "--log-every-processor",
         action="store_true",

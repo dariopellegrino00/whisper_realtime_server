@@ -1,8 +1,7 @@
 import re
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTO_FILE = ROOT / "proto" / "speech.proto"

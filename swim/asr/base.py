@@ -4,9 +4,7 @@ import sys
 class ASRBase:
     sep = " "  # Join transcribed words with spaces unless the backend emits them.
 
-    def __init__(
-        self, lan, modelsize=None, cache_dir=None, model_dir=None, logfile=sys.stderr
-    ):
+    def __init__(self, lan, modelsize=None, cache_dir=None, model_dir=None, logfile=sys.stderr):
         self.logfile = logfile
         self.transcribe_kargs = {}
         self.original_language = None if lan == "auto" else lan
@@ -23,4 +21,3 @@ class ASRBase:
 
 
 __all__ = ["ASRBase"]
-

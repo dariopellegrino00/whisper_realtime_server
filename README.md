@@ -88,6 +88,13 @@ Install all dependencies:
    python scripts/deps.py sync
    ```
 
+   The codebase uses Ruff for formatting and linting, and mypy for type checking:
+   ```bash
+   uv run ruff format swim tools scripts tests
+   uv run ruff check swim tools scripts tests
+   uv run mypy
+   ```
+
 2. Generate the pytgon-grpc files for grpc:
    ```bash
    python scripts/proto.py generate

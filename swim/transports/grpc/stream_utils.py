@@ -2,9 +2,9 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Iterable, Optional
 
 import numpy as np
 
@@ -16,17 +16,11 @@ def _configure_stdout_utf8():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def setup_logging(
-    log_name, use_stdout=False, log_folder="server_logs", level=logging.DEBUG
-):
+def setup_logging(log_name, use_stdout=False, log_folder="server_logs", level=logging.DEBUG):
     os.makedirs(log_folder, exist_ok=True)
 
-    log_path = os.path.join(
-        log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{log_name}.log"
-    )
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    log_path = os.path.join(log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{log_name}.log")
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(log_name)
     logger.setLevel(level)
     for handler in list(logger.handlers):
@@ -84,10 +78,8 @@ class ProcessorManager:
         self._stream_closed_event = asyncio.Event()
         self._registered = False
 
-    async def insert_audio(
-        self, already_collected_chunks: Optional[Iterable[float]] = None
-    ):
-        audio_batch = []
+    async def insert_audio(self, already_collected_chunks: Iterable[float] | None = None):
+        audio_batch: list[float] = []
         if already_collected_chunks is not None:
             audio_batch.extend(already_collected_chunks)
 
@@ -109,9 +101,7 @@ class ProcessorManager:
         if re_init_processor:
             self.processor.init()
         try:
-            while (
-                self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set()
-            ):
+            while self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set():
                 await asyncio.sleep(0.001)
 
             await self._shared_asr.register_processor(self.id, self.processor)

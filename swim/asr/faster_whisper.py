@@ -63,4 +63,3 @@ class FasterWhisperASR(ASRBase):
 
 
 __all__ = ["FasterWhisperASR"]
-

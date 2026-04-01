@@ -13,8 +13,8 @@ fake_generated.speech_pb2 = fake_speech_pb2
 sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 
-from swim.transports.grpc.session import StandardWhispStreamSession
-from tests.conftest import AsyncIterator
+from swim.transports.grpc.session import StandardWhispStreamSession  # noqa: E402
+from tests.conftest import AsyncIterator  # noqa: E402
 
 
 class AbortCalled(Exception):
@@ -114,7 +114,9 @@ def test_consume_initial_audio_request_uses_same_validation():
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500), FakeContext())
         samples = np.array([0.1, 0.2], dtype=np.float32)
-        await session.consume_initial_audio_request(FakeRequest(audio_bytes=samples.tobytes()), FakeContext())
+        await session.consume_initial_audio_request(
+            FakeRequest(audio_bytes=samples.tobytes()), FakeContext()
+        )
         assert len(session.processor_manager.inserted_batches) == 1
         assert np.array_equal(session.processor_manager.inserted_batches[0], samples)
 
