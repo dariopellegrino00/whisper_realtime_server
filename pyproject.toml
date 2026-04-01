@@ -1,0 +1,51 @@
+[project]
+name = "swim"
+version = "0.1.0"
+description = "A Python package for the SWIM experimental framework."
+requires-python = ">=3.10" # TODO: Verify this version requirement i used 3.10 at least based on the actual code
+dependencies = [
+    "faster-whisper==1.1.1",
+    "librosa==0.11.0",
+    "rapidfuzz==3.13.0",
+    "soundfile==0.13.1",
+    "sounddevice==0.5.1",
+    "protobuf==5.29.6",
+    "grpcio==1.71.0",
+    "grpcio-tools==1.71.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [".venv", ".uv-cache"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [ #TODO: Verify which rules we want to enable, this is just a starting point based on common practice
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "B",   # flake8-bugbear
+    "I",   # isort
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "RUF", # regole native Ruff
+]
+
+#TODO: Verify which rules we want to enable and how
+[tool.mypy]
+python_version = "3.10"
+strict = true # or true?
+warn_unused_ignores = true 
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

@@ -7,13 +7,13 @@ import numpy as np
 import pytest
 from grpc import StatusCode
 
-fake_generated = ModuleType("src.generated")
-fake_speech_pb2 = ModuleType("src.generated.speech_pb2")
+fake_generated = ModuleType("swim.transports.grpc.generated")
+fake_speech_pb2 = ModuleType("swim.transports.grpc.generated.speech_pb2")
 fake_generated.speech_pb2 = fake_speech_pb2
-sys.modules.setdefault("src.generated", fake_generated)
-sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
+sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
+sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 
-from src.server.stream_session import StandardWhispStreamSession
+from swim.transports.grpc.session import StandardWhispStreamSession
 from tests.conftest import AsyncIterator
 
 
@@ -138,7 +138,7 @@ def test_request_enqueuer_logs_when_client_closes_request_stream(caplog):
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500), FakeContext())
 
-        with caplog.at_level(logging.INFO, logger="src.server.stream_session"):
+        with caplog.at_level(logging.INFO, logger="swim.transports.grpc.session"):
             await session.request_enqueuer(AsyncIterator([]), FakeContext())
 
         assert "Client closed request stream for test-stream" in caplog.text

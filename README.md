@@ -56,7 +56,7 @@ git git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
    docker run --gpus all -p 50051-50052:50051-50052 --name whisper_server whisper_realtime_server
    ```
    - You can change the port range `50051-50052:50051-50052` if needed, these are the server's default. You can use the parameters to customize the Dockerfile server startup command, check available args in the **Running the server** section below. By default, only the `--fallback` arg is passed to the server, to enable fallback logic.
-   - The server is now running and ready to accept connections. You can access it at port `50051` and `50052` using the `grpcclient.py` script.
+   - The server is now running and ready to accept connections. You can access it at port `50051` and `50052` using the test client in `tools/grpc_client.py`.
 
 4. To stop the Docker container:
 
@@ -90,6 +90,14 @@ Install all dependencies:
    `make proto` is still available as a wrapper if you prefer it. On Linux, if `python` is not available as a command, use `make proto PYTHON=python3`.
 </details>
 
+## Repository Layout
+
+- `swim/asr/`: ASR backends and model-facing code.
+- `swim/runtime/`: shared realtime runtime, processors, batching, and buffering.
+- `swim/transports/grpc/`: gRPC server, sessions, stream utilities, and generated protobuf modules.
+- `tools/`: manual and test-oriented utilities such as the gRPC client.
+- `scripts/`: development scripts, including protobuf generation.
+
 ## gRPC client
 
 <details>
@@ -118,10 +126,10 @@ if you followed the `Building with Docker` section and you want to run the clien
    now you should see something like:
    
    ```bash
-   root@<imageid>:/app/src# 
+   root@<imageid>:/app# 
    ```
 
-   Now toy can run the client following the next step.
+   Now you can run the client following the next step.
    </details>
 
    ### Running the client
@@ -132,7 +140,7 @@ if you followed the `Building with Docker` section and you want to run the clien
    Run the client using your system microphone:
 
       ```bash
-      python -m src.client
+      python -m tools.grpc_client
       ```
 
    All the possible options:
@@ -171,7 +179,7 @@ if you followed the `Building with Docker` section and you want to run the clien
 
    ### Running the server
    ```bash
-   python -m src.server <options>
+   python -m swim.transports.grpc <options>
    ```
    The server is running and ready to accept connections. You can later customize the server models, behavior and other options using the command line arguments. Check the `--help` option for more details:
    ```
@@ -241,12 +249,3 @@ The shared realtime backend expects connected clients to keep the declared chunk
 
 - This project uses parts of the Whisper Streaming project. Other projects involved in whisper streaming are credited in their repo, check it out: [whisper streaming](https://github.com/ufal/whisper_streaming)
 - Credits also to: [faster whisper](https://github.com/SYSTRAN/faster-whisper)
-
-## FIXED 
-- [x] Send back last confirmed token when client send silent audio for a prolonged time (or no human speech audio)
-- [x] Rarely other client words can end in others buffer 
-- [x] `MultiProcessingFasterWhisperASR` and the Grpc Speech to text services can get stuck with high number of streaming active concurrently (10 to 20)
-- [x] ValueError(f"{id} is not a registered processor.") at end of services
-
-## KNOWN BUGS
-- [ ] Random words like `ok` or `thank you` are transcribed when client stays silent (VAD is missing)

@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import pytest
 
-import src.server.stream_utils as stream_utils
+import swim.transports.grpc.stream_utils as stream_utils
 
 # Minimal mock for ParallelOnlineASRProcessor used in ProcessorManager tests
 class DummyProcessor:
@@ -21,7 +21,7 @@ class DummyProcessor:
 
 def test_shared_asr_barrier_timeout_uses_max_chunk_duration(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Verify that the barrier timeout adjusts based on the clients' chunk durations."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     # Using the factory to create a dummy ASR that avoids actual model loading
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(results=[("active", [])]))
@@ -38,7 +38,7 @@ def test_shared_asr_barrier_timeout_uses_max_chunk_duration(monkeypatch, run_tes
 
 def test_shared_asr_excludes_processor_still_not_ready_after_partial_batch(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Verify that unresponsive clients are timed out and cleaned up after a batch."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(results=[("active", [])]))
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -71,7 +71,7 @@ def test_shared_asr_excludes_processor_still_not_ready_after_partial_batch(monke
 
 def test_shared_asr_keeps_timed_out_candidate_if_it_recovers_before_post_batch_check(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Verify that a processor isn't removed if it becomes ready just before the cleanup happens."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(results=[("active", [])]))
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -98,7 +98,7 @@ def test_shared_asr_keeps_timed_out_candidate_if_it_recovers_before_post_batch_c
 
 def test_shared_asr_wait_does_not_release_processor_omitted_from_partial_batch(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory, run_asr_loop):
     """Ensure processors omitted from a transcription batch don't accidentally return."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory())
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -132,7 +132,7 @@ def test_shared_asr_wait_does_not_release_processor_omitted_from_partial_batch(m
 
 def test_shared_asr_transcribe_updates_claimed_processor_with_empty_result_when_asr_omits_it(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Ensure that we properly clear states if the ASR engine misses a claimed processor."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     # Simulate ASR returning results only for the 'active' processor
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(results=[("active", [("ok",)])]))
@@ -159,7 +159,7 @@ def test_shared_asr_transcribe_updates_claimed_processor_with_empty_result_when_
 
 def test_shared_asr_loop_transcribes_ready_processors_and_excludes_late_ones_on_timeout(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory, run_asr_loop):
     """Verify the main ASR loop behavior under mixed client readiness and timeouts."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(results=[("active", [("ok",)])]))
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -188,7 +188,7 @@ def test_shared_asr_loop_transcribes_ready_processors_and_excludes_late_ones_on_
 
 def test_shared_asr_wait_reraises_if_loop_fails_after_timeout(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory, run_asr_loop):
     """Verify that exceptions in the ASR loop are propagated to waiting clients."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(exc=RuntimeError("boom")))
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -213,7 +213,7 @@ def test_shared_asr_wait_reraises_if_loop_fails_after_timeout(monkeypatch, run_t
 
 def test_shared_asr_wait_reraises_if_loop_fails_before_timeout(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory, run_asr_loop):
     """Verify loop failure propagation even during normal (no-timeout) operation."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory(exc=RuntimeError("boom")))
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -235,7 +235,7 @@ def test_shared_asr_wait_reraises_if_loop_fails_before_timeout(monkeypatch, run_
 
 def test_shared_asr_wait_returns_when_processor_is_unregistered(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Ensure wait() unblocks if the client disconnects manually."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory())
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -255,7 +255,7 @@ def test_shared_asr_wait_returns_when_processor_is_unregistered(monkeypatch, run
 
 def test_shared_asr_wait_returns_when_stopped_after_timeout(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory, run_asr_loop):
     """Ensure wait() unblocks when the shared ASR service is stopped."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory())
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")
@@ -279,7 +279,7 @@ def test_shared_asr_wait_returns_when_stopped_after_timeout(monkeypatch, run_tes
 
 def test_shared_asr_register_and_wait_fail_fast_after_loop_failure(monkeypatch, run_test, dummy_processor_factory, dummy_asr_cls_factory):
     """Verify that we can't interact with the service if the loop has already crashed."""
-    import src.parallel_whisper_online as pwo
+    import swim.runtime.shared_asr as pwo
 
     monkeypatch.setattr(pwo, "MultiProcessingFasterWhisperASR", dummy_asr_cls_factory())
     shared_asr = pwo.ParallelRealtimeASR(modelsize="tiny")

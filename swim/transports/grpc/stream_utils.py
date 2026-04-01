@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 
-from src.parallel_whisper_online import ParallelOnlineASRProcessor
+from swim.runtime import ParallelOnlineASRProcessor
 
 
 def _configure_stdout_utf8():

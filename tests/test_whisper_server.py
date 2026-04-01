@@ -9,20 +9,22 @@ from grpc import StatusCode
 
 # We need to mock the gRPC generated modules BEFORE importing the servicer.
 # This prevents ImportErrors since we don't want to rely on the actual protoc-generated files during unit tests.
-fake_generated = ModuleType("src.generated")
-fake_speech_pb2_grpc = ModuleType("src.generated.speech_pb2_grpc")
-fake_speech_pb2 = ModuleType("src.generated.speech_pb2")
+fake_generated = ModuleType("swim.transports.grpc.generated")
+fake_speech_pb2_grpc = ModuleType("swim.transports.grpc.generated.speech_pb2_grpc")
+fake_speech_pb2 = ModuleType("swim.transports.grpc.generated.speech_pb2")
 fake_speech_pb2_grpc.SpeechToTextServicer = type("SpeechToTextServicer", (), {})
 fake_speech_pb2_grpc.SpeechToTextWithHypothesisServicer = type(
     "SpeechToTextWithHypothesisServicer", (), {}
 )
 fake_generated.speech_pb2_grpc = fake_speech_pb2_grpc
 fake_generated.speech_pb2 = fake_speech_pb2
-sys.modules.setdefault("src.generated", fake_generated)
-sys.modules.setdefault("src.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
-sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
+sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
+sys.modules.setdefault(
+    "swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc
+)
+sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 
-from src.server.whisper_server import BaseSpeechToTextServicer, build_parser
+from swim.transports.grpc.server import BaseSpeechToTextServicer, build_parser
 from tests.conftest import AsyncIterator
 
 # These mock classes allow us to isolate the gRPC servicer logic without

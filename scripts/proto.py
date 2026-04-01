@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -5,8 +6,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTO_FILE = ROOT / "proto" / "speech.proto"
-GEN_DIR = ROOT / "src" / "generated"
-FIX_IMPORTS_SCRIPT = ROOT / "fix_proto_imports.py"
+GEN_DIR = ROOT / "swim" / "transports" / "grpc" / "generated"
+
+
+def _fix_generated_imports() -> None:
+    for path in GEN_DIR.glob("*.py"):
+        content = path.read_text()
+        content = re.sub(
+            r"^import (\w+_pb2)",
+            r"from swim.transports.grpc.generated import \1",
+            content,
+            flags=re.MULTILINE,
+        )
+        path.write_text(content)
 
 
 def generate() -> int:
@@ -23,7 +35,7 @@ def generate() -> int:
         str(PROTO_FILE),
     ]
     subprocess.run(command, check=True, cwd=ROOT)
-    subprocess.run([sys.executable, str(FIX_IMPORTS_SCRIPT)], check=True, cwd=ROOT)
+    _fix_generated_imports()
     return 0
 
 

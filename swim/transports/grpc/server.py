@@ -12,14 +12,14 @@ from typing import Type
 import grpc
 from grpc import StatusCode, aio
 
-from src.generated import speech_pb2_grpc
-from src.parallel_whisper_online import ParallelRealtimeASR, resolve_asr_backend
-from src.server.stream_session import (
+from swim.runtime import ParallelRealtimeASR, resolve_asr_backend
+from swim.transports.grpc.generated import speech_pb2_grpc
+from swim.transports.grpc.session import (
     HypothesisWhispStreamSession,
     StandardWhispStreamSession,
     StreamSession,
 )
-from src.server.stream_utils import ProcessorManager, setup_logging
+from swim.transports.grpc.stream_utils import ProcessorManager, setup_logging
 
 
 class BaseSpeechToTextServicer(ABC):

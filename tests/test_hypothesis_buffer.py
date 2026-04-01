@@ -1,12 +1,6 @@
-"""Unit tests for the HypothesisBuffer in whisper_online.py."""
+"""Unit tests for the hypothesis buffer."""
 
-import sys
-import os
-
-# Ensure the src directory is in the path so we can import whisper_online
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from whisper_online import HypothesisBuffer
+from swim.runtime import HypothesisBuffer
 
 
 def make_words(texts, start=0.0, step=0.5):

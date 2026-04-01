@@ -9,7 +9,7 @@ import librosa
 import numpy as np
 import sounddevice as sd
 
-from src.generated import speech_pb2, speech_pb2_grpc
+from swim.transports.grpc.generated import speech_pb2, speech_pb2_grpc
 
 # WARNING: This code is just a test client for testing the multiclient realtime whisper server
 
@@ -334,3 +334,7 @@ def main():
 
     client = TranscriptorClient(host=args.host, port=args.port, with_hypothesis=args.with_hypothesis, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
+
+
+if __name__ == "__main__":
+    main()

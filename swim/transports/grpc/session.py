@@ -7,8 +7,9 @@ import grpc
 import numpy as np
 from grpc import StatusCode
 
-from src.generated import speech_pb2 as whisp_speech
-from src.server.stream_utils import *
+from swim.runtime import ParallelOnlineASRProcessor
+from swim.transports.grpc.generated import speech_pb2 as whisp_speech
+from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
 
 BYTES_PER_SAMPLE = 4
 
@@ -40,6 +41,7 @@ class StreamSession(ABC):
     @abstractmethod
     def final_response(self) -> List:
         pass
+
 
 class WhispStreamSession(StreamSession):
     def __init__(self, processor_manager: ProcessorManager, server_logger=None, logger=None):

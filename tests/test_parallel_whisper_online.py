@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import src.parallel_whisper_online as pwo
+import swim.runtime.shared_asr as pwo
 
 
 def _segment(start, end, words, no_speech_prob=0.0):
