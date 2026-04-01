@@ -83,11 +83,15 @@ Install all dependencies:
    pip install -r requirements.txt
    ```
 
+   If you update dependencies in `pyproject.toml`, regenerate `uv.lock` and `requirements.txt` with:
+   ```bash
+   python scripts/deps.py sync
+   ```
+
 2. Generate the pytgon-grpc files for grpc:
    ```bash
    python scripts/proto.py generate
    ```
-   `make proto` is still available as a wrapper if you prefer it. On Linux, if `python` is not available as a command, use `make proto PYTHON=python3`.
 </details>
 
 ## Repository Layout
@@ -96,7 +100,7 @@ Install all dependencies:
 - `swim/runtime/`: shared realtime runtime, processors, batching, and buffering.
 - `swim/transports/grpc/`: gRPC server, sessions, stream utilities, and generated protobuf modules.
 - `tools/`: manual and test-oriented utilities such as the gRPC client.
-- `scripts/`: development scripts, including protobuf generation.
+- `scripts/`: development scripts, including `proto.py` for protobuf generation and `deps.py` for dependency sync/check.
 
 ## gRPC client
 

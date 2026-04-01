@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "swim"
 version = "0.1.0"
@@ -12,6 +16,7 @@ dependencies = [
     "protobuf==5.29.6",
     "grpcio==1.71.0",
     "grpcio-tools==1.71.0",
+    "onnxruntime<1.24; python_version < '3.11'",
 ]
 
 [dependency-groups]
@@ -21,6 +26,9 @@ dev = [
 
 [tool.hatch.build.targets.sdist]
 exclude = [".venv", ".uv-cache"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["swim"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

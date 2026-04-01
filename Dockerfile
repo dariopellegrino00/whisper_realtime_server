@@ -33,7 +33,6 @@ RUN pip3 install --no-cache-dir -r /app/requirements.txt
 COPY scripts /app/scripts
 COPY swim /app/swim
 COPY tools /app/tools
-COPY Makefile /app/
 COPY proto /app/proto
 
 RUN python3 /app/scripts/proto.py generate

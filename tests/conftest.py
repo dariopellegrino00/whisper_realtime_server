@@ -7,9 +7,6 @@ from types import ModuleType
 import pytest
 import numpy as np
 
-# Ignore playground scripts during test collection
-collect_ignore_glob = ["playground/*"]
-
 # --- Mocks and Utilities shared across tests ---
 
 class AbortCalled(Exception):
