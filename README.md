@@ -237,7 +237,9 @@ If you followed the `Building with Docker` section and you want to run the clien
    --max-workers MAX_WORKERS
                         Max workers for the server
    --log-every-processor
-                        Log every processor in a separate file
+                        Write one log file per stream. Debug-only: busy or
+                        long-running servers can keep many log files open and
+                        create many files.
    --model {tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo}
                         Name of the Whisper model to use (default:
                         large-v3-turbo). The model is automatically downloaded from the
@@ -257,6 +259,10 @@ If you followed the `Building with Docker` section and you want to run the clien
                         Log level for the server and shared ASR logger (DEBUG,
                         INFO, WARNING, ERROR, CRITICAL)
    ```
+   Use `--log-every-processor` only for focused debugging. It creates one file
+   handler per active stream, so busy or long-running servers can keep many log
+   files open and generate a large number of files over time.
+
    On Windows, stop the server with `Ctrl+C`. The local server still requires a working CUDA 12 / cuDNN 9 setup, just like the Docker image.
 
    The server supports both `plain` and `batched` shared ASR backends through `--backend`. Shared VAD preprocessing is enabled by default and can be disabled with `--no-vad`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the current default backend, while `batched` remains available for performance evaluation and further investigation.

@@ -191,9 +191,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 self.transcribe_parallel(buffer, use_vad=False)
                 self._log.info("asr is warmed up")
             else:
-                self._log.info("%s not found", filepath)
+                self._log.debug("Warmup file not found: %s", filepath)
         else:
-            self._log.info("no warmup file provided or file not found")
+            self._log.debug("No warmup file provided")
 
     def _prepare_clip(self, clip_audio, use_vad=None):
         if use_vad is None:
@@ -521,7 +521,6 @@ class ParallelRealtimeASR:
             len(processor.audio_buffer) / OnlineASRProcessor.SAMPLING_RATE
             for processor in current_processors.values()
         )
-        self._logger.debug("Time lost waiting %s seconds", waiting_time)
         self._logger.info(
             "Transcribing %d processor(s): ids=%s total_audio_seconds=%.2f waited=%.3fs registered=%d",
             len(current_processors),

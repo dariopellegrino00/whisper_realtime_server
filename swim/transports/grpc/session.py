@@ -82,15 +82,13 @@ class SpeechStreamSession(StreamSession):
             raise
         except grpc.RpcError as exc:
             if exc.code() == StatusCode.CANCELLED:
-                self.server_logger.info(f"Client disconnected from {self.id}")
+                self.logger.info("Client disconnected from %s", self.id)
             raise
-        except Exception as exc:
-            self.processor_manager.logger.error(
-                f"Exception in request_enqueuer {self.processor_manager.id}: {exc}"
-            )
+        except Exception:
+            self.logger.exception("Request enqueuer failed for %s", self.id)
             raise
         else:
-            self.server_logger.info(f"Client closed request stream for {self.id}")
+            self.logger.info("Client closed request stream for %s", self.id)
         finally:
             self.processor_manager.mark_stream_closed()
 
@@ -114,6 +112,11 @@ class SpeechStreamSession(StreamSession):
             * BYTES_PER_SAMPLE
         )
         self.processor_manager.processor.chunk_duration_seconds = chunk_duration_millis / 1000.0
+        self.logger.debug(
+            "Accepted stream config: chunk_duration_millis=%s max_chunk_bytes=%s",
+            self.chunk_duration_millis,
+            self.max_chunk_bytes,
+        )
 
     def create_response(self):
         results = self.processor_manager.processor.results

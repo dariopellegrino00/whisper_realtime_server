@@ -205,7 +205,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
 
         self._chunk_buffer_at()
 
-        self.logger.info("len of buffer now: %.2f", self.buffer_time_seconds)
+        self.logger.debug("len of buffer now: %.2f", self.buffer_time_seconds)
         self.logger.debug("ITERATION END \n")
 
     @property
