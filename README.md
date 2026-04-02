@@ -182,23 +182,25 @@ If you followed the `Building with Docker` section and you want to run the clien
 
       Standard output:
       ```
-      CONF 0000 0600 Hi my names
-      CONF 1000 2300 is Dario, nice
-      CONF 3000 4500 to meet you.
-      CONF 5000 7000 How are you?
+      0000 0600 Hi my names
+      1000 2300 is Dario, nice
+      3000 4500 to meet you.
+      5000 7000 How are you?
       ``` 
 
       `--all-updates` output:
       ```
+      --------------------
       CONF 1000 2300 is Dario,
       INT  2300 2600 nice
       
+      --------------------
       INT  2300 3200 nice to meet
       ```
 
       `--live-preview` keeps the confirmed transcript on screen and renders the current interim
-      continuation in gray. To get more frequent responses with a low client count (roughly 1 to
-      5), set `chunk_duration` to `0.5`.
+      continuation in light orange. To get more frequent responses with a low client count
+      (roughly 1 to 5), set `chunk_duration` to `0.5`.
 
 ## gRPC Server
 

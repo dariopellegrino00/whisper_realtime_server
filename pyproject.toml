@@ -63,7 +63,7 @@ known-first-party = ["scripts", "swim", "tests", "tools"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["swim", "scripts"]
+files = ["swim", "scripts", "tools"]
 warn_unused_ignores = true 
 warn_return_any = true
 warn_unused_configs = true
@@ -72,6 +72,8 @@ warn_unused_configs = true
 module = ["swim.transports.grpc.generated.*"]
 ignore_errors = true
 
+# TODO: Re-evaluate these third-party overrides periodically and drop entries that
+# gain usable typing metadata or stubs.
 [[tool.mypy.overrides]]
 module = [
     "faster_whisper",
@@ -81,5 +83,6 @@ module = [
     "librosa",
     "rapidfuzz",
     "rapidfuzz.*",
+    "sounddevice",
 ]
 ignore_missing_imports = true
