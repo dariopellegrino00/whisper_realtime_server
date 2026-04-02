@@ -36,6 +36,15 @@ def _export_requirements(output_file: Path) -> None:
     )
 
 
+def _check_lockfile() -> None:
+    subprocess.run(
+        ["uv", "lock", "--check"],
+        check=True,
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def sync() -> int:
     _run("uv", "lock")
     _export_requirements(REQUIREMENTS)
@@ -55,13 +64,21 @@ def check() -> int:
         )
         return 1
 
+    try:
+        _check_lockfile()
+    except subprocess.CalledProcessError:
+        print(
+            "uv.lock is out of sync with pyproject.toml. Run `python scripts/deps.py sync`.",
+            file=sys.stderr,
+        )
+        return 1
+
     with tempfile.TemporaryDirectory() as tmpdir:
         expected = Path(tmpdir) / "requirements.txt"
         _export_requirements(expected)
         if expected.read_text() != REQUIREMENTS.read_text():
             print(
-                "requirements.txt is out of sync with pyproject.toml/uv.lock. "
-                "Run `python scripts/deps.py sync`.",
+                "requirements.txt is out of sync with uv.lock. Run `python scripts/deps.py sync`.",
                 file=sys.stderr,
             )
             return 1
