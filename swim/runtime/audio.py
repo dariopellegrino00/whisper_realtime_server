@@ -15,9 +15,3 @@ def load_audio_chunk(fname, beg, end):
     beg_s = int(beg * 16000)
     end_s = int(end * 16000)
     return audio[beg_s:end_s]
-
-
-__all__ = [
-    "load_audio",
-    "load_audio_chunk",
-]

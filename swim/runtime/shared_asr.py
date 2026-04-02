@@ -606,19 +606,3 @@ class ParallelRealtimeASR:
                 for process in self._registered_pids.values():
                     process.transcription_event.set()
             self._logger.exception(exc)
-
-
-__all__ = [
-    "DEFAULT_ASR_BACKEND",
-    "DEFAULT_BATCHED_BACKEND_CLIP_SEPARATOR_SAMPLES",
-    "DEFAULT_BATCHED_INFERENCE_BATCH_SIZE",
-    "DEFAULT_EXPECTED_CHUNK_DURATION_SECONDS",
-    "DEFAULT_PLAIN_BACKEND_CLIP_SEPARATOR_SAMPLES",
-    "MultiProcessingFasterWhisperASR",
-    "ParallelAudioBuffer",
-    "ParallelRealtimeASR",
-    "RegisteredProcess",
-    "VALID_ASR_BACKENDS",
-    "create_asr_backend_adapter",
-    "resolve_asr_backend",
-]

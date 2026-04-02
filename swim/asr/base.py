@@ -18,6 +18,3 @@ class ASRBase:
 
     def use_vad(self):
         raise NotImplementedError("must be implemented in the child class")
-
-
-__all__ = ["ASRBase"]

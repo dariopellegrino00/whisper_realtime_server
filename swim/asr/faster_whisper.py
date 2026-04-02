@@ -60,6 +60,3 @@ class FasterWhisperASR(ASRBase):
 
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
-
-
-__all__ = ["FasterWhisperASR"]

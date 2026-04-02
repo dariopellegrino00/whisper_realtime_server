@@ -231,9 +231,3 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
                 chunk_time,
             )
             self.chunk_at(chunk_time)
-
-
-__all__ = [
-    "OnlineASRProcessor",
-    "ParallelOnlineASRProcessor",
-]
