@@ -106,3 +106,61 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -q
+
+  release:
+    name: Release (${{ github.ref_name }})
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [requirements-sync, ruff, mypy, pytest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tagged commit is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Tag ${GITHUB_REF_NAME} does not point to a commit reachable from origin/main."
+            exit 1
+          }
+
+      - name: Create or update GitHub Release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const tag = context.ref.replace("refs/tags/", "");
+            const prerelease = tag.includes("-");
+            const params = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: tag,
+              generate_release_notes: true,
+              prerelease,
+            };
+
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+
+              core.info(`Release for ${tag} already exists. Updating generated notes.`);
+              await github.rest.repos.updateRelease({
+                ...params,
+                release_id: existing.data.id,
+              });
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+
+              core.info(`Creating release for ${tag}.`);
+              await github.rest.repos.createRelease(params);
+            }
