@@ -58,6 +58,9 @@ ignore = [
     "E501",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["scripts", "swim", "tests", "tools"]
+
 [tool.mypy]
 python_version = "3.10"
 files = ["swim", "scripts"]
