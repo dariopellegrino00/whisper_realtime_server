@@ -13,9 +13,6 @@ fake_generated = ModuleType("swim.transports.grpc.generated")
 fake_speech_pb2_grpc = ModuleType("swim.transports.grpc.generated.speech_pb2_grpc")
 fake_speech_pb2 = ModuleType("swim.transports.grpc.generated.speech_pb2")
 fake_speech_pb2_grpc.SpeechToTextServicer = type("SpeechToTextServicer", (), {})
-fake_speech_pb2_grpc.SpeechToTextWithHypothesisServicer = type(
-    "SpeechToTextWithHypothesisServicer", (), {}
-)
 fake_generated.speech_pb2_grpc = fake_speech_pb2_grpc
 fake_generated.speech_pb2 = fake_speech_pb2
 sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)

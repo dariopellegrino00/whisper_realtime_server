@@ -44,13 +44,13 @@ class StreamSession(ABC):
         pass
 
 
-class WhispStreamSession(StreamSession):
+class SpeechStreamSession(StreamSession):
     def __init__(self, processor_manager: ProcessorManager, server_logger=None, logger=None):
         super().__init__(processor_manager, server_logger, logger)
-        self.transcription_managers = self.create_transcription_managers()
-
-    def create_transcription_managers(self) -> dict[str, TranscriptionManager]:
-        return {"confirmed": TranscriptionManager()}
+        self.transcription_managers = {
+            "confirmed": TranscriptionManager(),
+            "interim": TranscriptionManager(),
+        }
 
     async def _parse_audio_request(self, request, context):
         if request.WhichOneof("payload") != "audio_chunk":
@@ -115,54 +115,43 @@ class WhispStreamSession(StreamSession):
         )
         self.processor_manager.processor.chunk_duration_seconds = chunk_duration_millis / 1000.0
 
-
-class StandardWhispStreamSession(WhispStreamSession):
     def create_response(self):
         results = self.processor_manager.processor.results
-        exist, fmt = self.transcription_managers["confirmed"].format_transcript(results)
-        return [self._create_response(*fmt)] if exist else []
+        interim = self.processor_manager.processor.hypothesis
+        has_confirmed, confirmed_fmt = self.transcription_managers["confirmed"].format_transcript(
+            results
+        )
+        has_interim, interim_fmt = self.transcription_managers["interim"].format_transcript(
+            interim, use_last_end=False
+        )
+        if not has_confirmed and not has_interim:
+            return []
+        return [
+            self._create_response(
+                confirmed_fmt if has_confirmed else None,
+                interim_fmt if has_interim else None,
+            )
+        ]
 
     def final_response(self):
         results = self.processor_manager.processor.finish()
-        exist, fmt = self.transcription_managers["confirmed"].format_transcript(results)
-        return [self._create_response(*fmt)] if exist else []
+        has_confirmed, confirmed_fmt = self.transcription_managers["confirmed"].format_transcript(
+            results
+        )
+        return [self._create_response(confirmed_fmt)] if has_confirmed else []
 
-    def _create_response(self, start, end, text):
+    @staticmethod
+    def _create_transcript(start, end, text):
         return whisp_speech.Transcript(
             start_time_millis=start,
             end_time_millis=end,
             text=text,
         )
 
-
-class HypothesisWhispStreamSession(WhispStreamSession):
-    def create_transcription_managers(self):
-        return {"confirmed": TranscriptionManager(), "hypothesis": TranscriptionManager()}
-
-    def create_response(self):
-        results = self.processor_manager.processor.results
-        hypothesis = self.processor_manager.processor.hypothesis
-        exist1, fmt_t = self.transcription_managers["confirmed"].format_transcript(results)
-        exist2, fmt_h = self.transcription_managers["hypothesis"].format_transcript(
-            hypothesis, use_last_end=False
-        )
-        return [self._create_response(*fmt_t, *fmt_h)] if exist1 or exist2 else []
-
-    def final_response(self):
-        results = self.processor_manager.processor.finish()
-        exist, fmt_t = self.transcription_managers["confirmed"].format_transcript(results)
-        return [self._create_response(*fmt_t, 0, 0, "")] if exist else []
-
-    def _create_response(self, start_t, end_t, text, start_h, end_h, hypothesis):
-        return whisp_speech.TranscriptWithHypothesis(
-            confirmed=whisp_speech.Transcript(
-                start_time_millis=start_t,
-                end_time_millis=end_t,
-                text=text,
-            ),
-            hypothesis=whisp_speech.Transcript(
-                start_time_millis=start_h,
-                end_time_millis=end_h,
-                text=hypothesis,
-            ),
-        )
+    def _create_response(self, confirmed=None, interim=None):
+        fields = {}
+        if confirmed is not None:
+            fields["confirmed"] = self._create_transcript(*confirmed)
+        if interim is not None:
+            fields["interim"] = self._create_transcript(*interim)
+        return whisp_speech.StreamingRecognizeResponse(**fields)

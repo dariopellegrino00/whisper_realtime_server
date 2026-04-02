@@ -14,13 +14,16 @@ from grpc import StatusCode, aio
 from swim.runtime import ParallelRealtimeASR, resolve_asr_backend
 from swim.transports.grpc.generated import speech_pb2_grpc
 from swim.transports.grpc.session import (
-    HypothesisWhispStreamSession,
-    StandardWhispStreamSession,
+    SpeechStreamSession,
     StreamSession,
 )
 from swim.transports.grpc.stream_utils import ProcessorManager, setup_logging
 
 
+# This base servicer keeps the gRPC transport boundary separate from the shared runtime.
+# The current API uses a single service, but this layer stays useful if we later expose
+# alternative gRPC surfaces, such as a Google STT-compatible adapter, on top of the
+# same stream/session orchestration.
 class BaseSpeechToTextServicer(ABC):
     _service_id = itertools.count()
     log_every_processor = False
@@ -162,18 +165,9 @@ class BaseSpeechToTextServicer(ABC):
                 yield response
 
 
-class StandardWhispSpeechToTextServicer(
-    BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer
-):
+class SpeechToTextServicer(BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer):
     def StreamSessionType(self) -> type[StreamSession]:
-        return StandardWhispStreamSession
-
-
-class HypothesisWhispSpeechToTextServicer(
-    BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextWithHypothesisServicer
-):
-    def StreamSessionType(self) -> type[StreamSession]:
-        return HypothesisWhispStreamSession
+        return SpeechStreamSession
 
 
 async def serve(args):
@@ -257,11 +251,7 @@ async def serve(args):
     }
 
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(
-        StandardWhispSpeechToTextServicer(shared_asr, server_logger, **processor_args),
-        server,
-    )
-    speech_pb2_grpc.add_SpeechToTextWithHypothesisServicer_to_server(
-        HypothesisWhispSpeechToTextServicer(shared_asr, server_logger, **processor_args),
+        SpeechToTextServicer(shared_asr, server_logger, **processor_args),
         server,
     )
 
@@ -345,7 +335,7 @@ def build_parser():
         "--ports",
         type=int,
         nargs="+",
-        default=[50051, 50052],
+        default=[50051],
         help="Ports to run the server on",
     )
     parser.add_argument("--max-workers", type=int, default=20, help="Max workers for the server")

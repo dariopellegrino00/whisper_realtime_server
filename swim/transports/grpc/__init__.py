@@ -1,16 +1,13 @@
 from swim.transports.grpc.server import (
     BaseSpeechToTextServicer,
-    HypothesisWhispSpeechToTextServicer,
-    StandardWhispSpeechToTextServicer,
+    SpeechToTextServicer,
     build_parser,
     main,
     serve,
 )
 from swim.transports.grpc.session import (
-    HypothesisWhispStreamSession,
-    StandardWhispStreamSession,
+    SpeechStreamSession,
     StreamSession,
-    WhispStreamSession,
 )
 from swim.transports.grpc.stream_utils import (
     ProcessorManager,
@@ -20,14 +17,11 @@ from swim.transports.grpc.stream_utils import (
 
 __all__ = [
     "BaseSpeechToTextServicer",
-    "HypothesisWhispSpeechToTextServicer",
-    "HypothesisWhispStreamSession",
     "ProcessorManager",
-    "StandardWhispSpeechToTextServicer",
-    "StandardWhispStreamSession",
+    "SpeechStreamSession",
+    "SpeechToTextServicer",
     "StreamSession",
     "TranscriptionManager",
-    "WhispStreamSession",
     "build_parser",
     "main",
     "serve",
