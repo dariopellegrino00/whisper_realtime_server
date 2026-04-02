@@ -318,9 +318,15 @@ class TestFallbackLogic:
         buf2 = HypothesisBuffer(use_fallback=True, fallback_threshold=-5)
         assert buf2.fallback_threshold == 1
 
-    def test_fallback_disabled_by_default(self):
-        """Ensure that the fallback mechanism is inactive unless explicitly enabled."""
-        buf = HypothesisBuffer()  # Defaults to use_fallback=False
+    def test_fallback_enabled_by_default(self):
+        """Ensure that the fallback mechanism is active unless explicitly disabled."""
+        buf = HypothesisBuffer()
+
+        assert buf.use_fallback is True
+
+    def test_fallback_can_be_disabled_explicitly(self):
+        """Programmatic callers should still be able to disable fallback."""
+        buf = HypothesisBuffer(use_fallback=False)
 
         word_sets = [
             ["hello", "world"],

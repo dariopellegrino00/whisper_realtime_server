@@ -17,7 +17,7 @@ class HypothesisBuffer:
         self.last_commited_word = None
         self.fuzz_threshold = kwargs.get("qratio_threshold", 95)
         self.dedup_threshold = kwargs.get("dedup_threshold", 98)
-        self.use_fallback = kwargs.get("use_fallback", False)
+        self.use_fallback = kwargs.get("use_fallback", True)
         fallback_threshold = kwargs.get("fallback_threshold", 1)
         if fallback_threshold < 1:
             logger.warning(

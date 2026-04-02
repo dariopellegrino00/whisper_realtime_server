@@ -37,4 +37,4 @@ COPY proto /app/proto
 
 RUN python3 /app/scripts/proto.py generate
 
-CMD ["python3", "-u", "-m", "swim.transports.grpc", "--fallback"]
+CMD ["python3", "-u", "-m", "swim.transports.grpc"]

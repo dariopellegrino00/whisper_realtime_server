@@ -211,6 +211,8 @@ async def serve(args):
         if args.fallback_threshold <= 0:
             server_logger.error("Fallback threshold must be greater than 0")
             sys.exit(1)
+    else:
+        server_logger.info("Fallback logic disabled")
 
     if args.buffer_trimming_sec <= 0:
         server_logger.error("Buffer trimming must be greater than 0")
@@ -301,17 +303,22 @@ async def serve(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Argument parser for the whisper-realtme-server")
+    parser = argparse.ArgumentParser(
+        description="Argument parser for the whisper-realtme-server",
+        allow_abbrev=False,
+    )
     parser.add_argument(
-        "--fallback",
-        action="store_true",
-        help="Enable fallback logic when similarity local agreement fails for a mltitude of times",
+        "--no-fallback",
+        dest="fallback",
+        action="store_false",
+        default=True,
+        help="Disable fallback logic when similarity local agreement fails repeatedly",
     )
     parser.add_argument(
         "--fallback-threshold",
         type=int,
         default=1,
-        help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if --fallback is not set)",
+        help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if fallback is disabled)",
     )
     parser.add_argument(
         "--qratio-threshold",

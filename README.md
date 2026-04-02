@@ -63,8 +63,8 @@ git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
    ```
    - You can change the port mapping `50051:50051` if needed; this is the default server port.
      You can also customize the Docker startup command parameters. Check the available arguments
-     in the **Running the server** section below. By default, only the `--fallback` argument is
-     passed to the server to enable fallback logic.
+     in the **Running the server** section below. Fallback logic is enabled by default; pass
+     `--no-fallback` if you want to disable it.
    - The server is now running and ready to accept connections. You can access it on port
      `50051` using the test client in `tools/grpc_client.py`.
 
@@ -211,11 +211,11 @@ If you followed the `Building with Docker` section and you want to run the clien
    The server is running and ready to accept connections. You can later customize the model,
    behavior, and other options using command-line arguments. Check `--help` for more details:
    ```
-   --fallback            Enable fallback logic when similarity local agreement
+   --no-fallback         Disable fallback logic when similarity local agreement
                         fails multiple times
    --fallback-threshold FALLBACK_THRESHOLD
                         threshold t for fallback logic after t+1 similarity local
-                        agreement fails (ignored if --fallback is not set)
+                        agreement fails (ignored if fallback is disabled)
    --qratio-threshold QRATIO_THRESHOLD
                         Threshold for qratio to confirm and insert new words
                         using the hypothesis buffer (between 0 and 100), lower

@@ -240,6 +240,27 @@ def test_build_parser_enables_vad_by_default():
     assert args.vad is True
 
 
+def test_build_parser_enables_fallback_by_default():
+    args = build_parser().parse_args([])
+
+    assert args.fallback is True
+
+
+def test_build_parser_disables_fallback_with_no_fallback_flag():
+    args = build_parser().parse_args(["--no-fallback"])
+
+    assert args.fallback is False
+
+
+def test_build_parser_rejects_removed_fallback_flag(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["--fallback"])
+
+    assert excinfo.value.code == 2
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --fallback" in captured.err
+
+
 def test_build_parser_disables_vad_with_no_vad_flag():
     args = build_parser().parse_args(["--no-vad"])
 
