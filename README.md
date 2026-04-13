@@ -116,7 +116,8 @@ Install all dependencies:
 - `swim/asr/`: ASR backends and model-facing code.
 - `swim/runtime/`: shared realtime runtime, processors, batching, and buffering.
 - `swim/transports/grpc/`: gRPC server, sessions, stream utilities, and generated protobuf modules.
-- `tools/`: manual and test-oriented utilities such as the gRPC client.
+- `swim/transports/websocket/`: websocket server, sessions, and protocol helpers.
+- `tools/`: manual and test-oriented utilities such as the gRPC and websocket clients.
 - `scripts/`: development scripts, including `proto.py` for protobuf generation and `deps.py` for dependency sync/check.
 
 ## gRPC client
@@ -267,23 +268,120 @@ If you followed the `Building with Docker` section and you want to run the clien
 
    The server supports both `plain` and `batched` shared ASR backends through `--backend`. Shared VAD preprocessing is enabled by default and can be disabled with `--no-vad`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the current default backend, while `batched` remains available for performance evaluation and further investigation.
 
+## Websocket client
+
+The websocket test client supports the same live microphone and file simulation flows as the
+gRPC client.
+
+Run it against the default websocket server endpoint:
+
+```bash
+python -m tools.ws_client
+```
+
+The client-specific options are:
+
+```
+--host HOST          Websocket server address
+--port PORT          Websocket server port
+--path PATH          Websocket endpoint path
+--all-updates        Print each response packet in a grouped block, including interim updates
+--simulate SIMULATE  Simulation mode: path to the audio file used to simulate realtime streaming
+--live-preview       Display confirmed and interim text in a live preview view
+--chunk-duration     Change the chunk duration (in seconds) for the audio stream
+--sound-device-id    Select a specific input device for live audio capture
+```
+
+## Websocket server
+
+Run the websocket server with:
+
+```bash
+python -m swim.transports.websocket <options>
+```
+
+The websocket transport intentionally stays a separate entrypoint from gRPC for now. Both
+servers reuse the same shared runtime, but keep transport-specific startup, limits, and
+protocol handling separate.
+
+By default, the websocket server binds to:
+
+- host `0.0.0.0`
+- port `8000`
+- endpoint `/v1/transcribe`
+
+The runtime options are aligned with the gRPC server, including fallback, VAD, backend
+selection, and `--max-chunk-duration-seconds`.
+
 ## Documentation
 
 Before setting up your own client, it's important to understand the server architecture. The
-client first connects to a gRPC server on the default port (`50051`). After connecting, the
-gRPC server assigns a service to the client. The client then streams audio data to this port
-and receives real-time transcriptions.
+client first connects to a transport server:
+
+- gRPC on the default port `50051`
+- websocket on the default port `8000`
 
 At the moment the server runs a single shared `ParallelRealtimeASR` backend for all active
 streams. Each client gets its own stream processor state, but ready processors are grouped
-into the same shared inference cycle. A single gRPC streaming service is exposed, returning
-confirmed transcript segments together with optional interim updates. With the current
-protocol, the first streaming message is a config carrying the client `chunk_duration`. In
-practice, clients connected to the same server instance should use the same
-`chunk_duration`, and that duration should stay at or below the server
-`--max-chunk-duration-seconds` limit.
+into the same shared inference cycle. Both transports return confirmed transcript segments
+together with optional interim updates. In practice, clients connected to the same server
+instance should use the same `chunk_duration`, and that duration should stay at or below the
+server `--max-chunk-duration-seconds` limit.
 
 The shared realtime backend expects connected clients to keep the declared chunk cadence. During silence, clients should keep sending silent chunks at the same cadence instead of pausing the stream. If a client stops producing chunks while remaining connected, it may be excluded so that it does not delay the other active streams.
+
+### Websocket protocol
+
+The websocket transport uses a single endpoint:
+
+- `/v1/transcribe`
+
+The protocol is hybrid:
+
+- text frames carry JSON control messages and server events
+- binary frames carry raw audio payloads
+
+The first client message must be a JSON `start` event:
+
+```json
+{
+  "type": "start",
+  "chunk_duration_millis": 500,
+  "audio_format": {
+    "encoding": "pcm_f32le",
+    "sample_rate_hz": 16000,
+    "channels": 1
+  }
+}
+```
+
+After that:
+
+- the client sends binary audio frames containing mono `pcm_f32le` at `16000` Hz
+- the client closes its send side logically with a JSON `finish` event
+
+Server events are JSON text frames. The main event is `transcript`:
+
+```json
+{
+  "type": "transcript",
+  "confirmed": {
+    "start_time_millis": 972,
+    "end_time_millis": 1532,
+    "text": "Hi"
+  },
+  "interim": {
+    "start_time_millis": 1532,
+    "end_time_millis": 1810,
+    "text": "there!"
+  }
+}
+```
+
+Both `confirmed` and `interim` are optional. The server can also send:
+
+- `completed`
+- `error`
 
 
 ## Credits

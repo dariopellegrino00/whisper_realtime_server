@@ -5,16 +5,22 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass
-from queue import Empty, Full, Queue
 from typing import Any
 
 import grpc
-import librosa
-import numpy as np
 import numpy.typing as npt
-import sounddevice as sd
 
 from swim.transports.grpc.generated import speech_pb2, speech_pb2_grpc
+from tools._audio_client_common import (
+    AudioConfig,
+    LiveAudioChunkProducer,
+    LiveInputSettings,
+    add_common_client_args,
+    load_simulated_audio,
+    normalize_samples,
+    print_live_input_banner,
+    resolve_live_input_settings,
+)
 
 # WARNING: This code is just a test client for testing the multiclient realtime whisper server
 
@@ -22,28 +28,6 @@ PB2: Any = speech_pb2
 PB2_GRPC: Any = speech_pb2_grpc
 LIVE_PREVIEW_INTERIM_COLOR = "38;5;215"
 ALL_UPDATES_SEPARATOR = "--------------------"
-
-AudioSamples = npt.NDArray[np.float32]
-
-
-@dataclass(slots=True)
-class AudioConfig:
-    chunk_duration_seconds: float
-    sample_rate: int = 16000
-    channels: int = 1
-    input_dtype: str = "float32"
-
-    @property
-    def chunk_duration_millis(self) -> int:
-        return int(round(self.chunk_duration_seconds * 1000))
-
-    @property
-    def effective_chunk_duration_seconds(self) -> float:
-        return self.chunk_duration_millis / 1000.0
-
-    def chunk_size(self, sample_rate: int | None = None) -> int:
-        effective_sample_rate = sample_rate if sample_rate is not None else self.sample_rate
-        return int(self.chunk_duration_millis * effective_sample_rate / 1000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,15 +38,6 @@ class ClientOptions:
     simulate_filepath: str | None
     live_preview: bool
     sound_device_id: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class LiveInputSettings:
-    device_id: int
-    device_name: str
-    capture_sample_rate: int
-    source_sample_rate: int
-    channels: int
 
 
 class TranscriptRenderer:
@@ -164,40 +139,19 @@ class TranscriptionClient:
             )
         )
 
-    @staticmethod
-    def _normalize_samples(samples: npt.ArrayLike) -> AudioSamples:
-        normalized = np.asarray(samples, dtype=np.float32)
-        if normalized.ndim == 2:
-            normalized = normalized.mean(axis=1)
-        return normalized.reshape(-1)
-
     def _build_audio_request(self, samples: npt.ArrayLike) -> Any:
-        normalized_samples = self._normalize_samples(samples)
+        normalized_samples = normalize_samples(samples)
         return PB2.StreamingRecognizeRequest(
             audio_chunk=PB2.AudioChunk(audio_bytes=normalized_samples.tobytes())
         )
 
-    @staticmethod
-    def _default_input_device_id() -> int | None:
-        default_device = sd.default.device
-        if hasattr(default_device, "__getitem__"):
-            default_input = default_device[0]
-        else:
-            default_input = default_device
-        if default_input is None or default_input < 0:
-            return None
-        return int(default_input)
-
     def _stream_simulated_audio(self) -> Any:
         assert self.options.simulate_filepath is not None
 
-        audio_data, _ = librosa.load(
+        normalized_audio = load_simulated_audio(
             self.options.simulate_filepath,
-            sr=self.audio_config.sample_rate,
-            mono=True,
-            dtype=np.float32,
+            self.audio_config.sample_rate,
         )
-        normalized_audio = self._normalize_samples(audio_data)
         print(f"Loaded {len(normalized_audio)} samples from file {self.options.simulate_filepath}")
 
         yield self._build_config_request()
@@ -206,165 +160,15 @@ class TranscriptionClient:
             yield self._build_audio_request(chunk_samples)
             time.sleep(self.audio_config.effective_chunk_duration_seconds)
 
-    def _candidate_device_ids(self) -> list[int]:
-        if self.options.sound_device_id is not None:
-            return [self.options.sound_device_id]
-
-        candidates: list[int] = []
-        default_device_id = self._default_input_device_id()
-        if default_device_id is not None:
-            candidates.append(default_device_id)
-
-        for device_id, device_info in enumerate(sd.query_devices()):
-            if int(device_info["max_input_channels"]) > 0 and device_id not in candidates:
-                candidates.append(device_id)
-        return candidates
-
-    def _candidate_sample_rates(self, device_info: Any) -> list[int]:
-        candidates: list[int] = []
-
-        def add(rate: int) -> None:
-            if rate > 0 and rate not in candidates:
-                candidates.append(rate)
-
-        add(self.audio_config.sample_rate)
-        add(int(round(float(device_info["default_samplerate"]))))
-        add(48000)
-        add(44100)
-        add(32000)
-        add(16000)
-        return candidates
-
-    @staticmethod
-    def _candidate_channels(device_info: Any) -> list[int]:
-        max_input_channels = int(device_info["max_input_channels"])
-        candidates: list[int] = []
-        for channels in (1, 2):
-            if 0 < channels <= max_input_channels and channels not in candidates:
-                candidates.append(channels)
-        return candidates
-
-    def _resolve_live_input_settings(self) -> LiveInputSettings:
-        attempted: list[str] = []
-
-        for device_id in self._candidate_device_ids():
-            try:
-                device_info = sd.query_devices(device_id)
-            except sd.PortAudioError as exc:
-                attempted.append(f"{device_id}: {exc}")
-                continue
-            max_input_channels = int(device_info["max_input_channels"])
-            if max_input_channels <= 0:
-                continue
-
-            for channels in self._candidate_channels(device_info):
-                for sample_rate in self._candidate_sample_rates(device_info):
-                    try:
-                        sd.check_input_settings(
-                            device=device_id,
-                            channels=channels,
-                            dtype=self.audio_config.input_dtype,
-                            samplerate=sample_rate,
-                        )
-                    except sd.PortAudioError as exc:
-                        attempted.append(
-                            f"{device_id}@{sample_rate}Hz/{channels}ch ({device_info['name']}): {exc}"
-                        )
-                        continue
-
-                    return LiveInputSettings(
-                        device_id=int(device_id),
-                        device_name=str(device_info["name"]),
-                        capture_sample_rate=sample_rate,
-                        source_sample_rate=sample_rate,
-                        channels=channels,
-                    )
-
-        if self.options.sound_device_id is not None:
-            prefix = f"Could not open input device {self.options.sound_device_id}."
-        else:
-            prefix = "Could not find a working microphone input device."
-
-        details = "\n".join(attempted[:5])
-        if len(attempted) > 5:
-            details += f"\n... and {len(attempted) - 5} more failed combinations."
-        raise RuntimeError(f"{prefix}\n{details}" if details else prefix)
-
     def _stream_live_audio_with_rate(
         self,
         *,
         live_input: LiveInputSettings,
     ) -> Any:
-        chunk_samples = max(1, self.audio_config.chunk_size(live_input.capture_sample_rate))
-        audio_queue: Queue[AudioSamples] = Queue(maxsize=100)
-
-        def audio_callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
-            del frames, time_info
-            if status:
-                print(f"Audio callback status: {status}", file=sys.stderr)
-
-            chunk = self._normalize_samples(indata)
-            try:
-                audio_queue.put_nowait(chunk)
-            except Full:
-                try:
-                    audio_queue.get_nowait()
-                except Empty:
-                    pass
-                try:
-                    audio_queue.put_nowait(chunk)
-                except Full:
-                    pass
-
-        try:
-            with sd.InputStream(
-                device=live_input.device_id,
-                channels=live_input.channels,
-                samplerate=live_input.capture_sample_rate,
-                blocksize=0,
-                dtype=self.audio_config.input_dtype,
-                latency="low",
-                callback=audio_callback,
-            ):
-                yield self._build_config_request()
-
-                buffered_chunks: list[AudioSamples] = []
-                buffered_samples = 0
-
-                while True:
-                    chunk = audio_queue.get()
-                    buffered_chunks.append(chunk)
-                    buffered_samples += len(chunk)
-
-                    if buffered_samples < chunk_samples:
-                        continue
-
-                    chunk_native = self._normalize_samples(np.concatenate(buffered_chunks))
-                    if len(chunk_native) > chunk_samples:
-                        chunk_to_send = chunk_native[:chunk_samples]
-                        remainder = chunk_native[chunk_samples:]
-                        buffered_chunks = [remainder] if len(remainder) else []
-                        buffered_samples = len(remainder)
-                    else:
-                        chunk_to_send = chunk_native
-                        buffered_chunks = []
-                        buffered_samples = 0
-
-                    if live_input.source_sample_rate != self.audio_config.sample_rate:
-                        chunk_to_send = self._normalize_samples(
-                            librosa.resample(
-                                chunk_to_send,
-                                orig_sr=live_input.source_sample_rate,
-                                target_sr=self.audio_config.sample_rate,
-                            )
-                        )
-
-                    yield self._build_audio_request(chunk_to_send)
-        except sd.PortAudioError as exc:
-            raise RuntimeError(
-                f"Could not start microphone input on device {live_input.device_id} "
-                f"({live_input.device_name}): {exc}"
-            ) from exc
+        with LiveAudioChunkProducer(self.audio_config, live_input) as producer:
+            yield self._build_config_request()
+            while True:
+                yield self._build_audio_request(producer.read_chunk())
 
     def stream_requests(self, live_input: LiveInputSettings | None = None) -> Any:
         print("Started connection")
@@ -373,16 +177,7 @@ class TranscriptionClient:
         if live_input is None:
             raise RuntimeError("Live input settings must be resolved before starting live capture.")
 
-        print("Capturing real-time audio from the microphone...")
-        print(
-            f"Using input device {live_input.device_id}: {live_input.device_name} "
-            f"({live_input.channels} channel(s), {live_input.capture_sample_rate} Hz)"
-        )
-        if live_input.capture_sample_rate != self.audio_config.sample_rate:
-            print(
-                f"Resampling microphone audio from {live_input.capture_sample_rate} Hz "
-                f"to {self.audio_config.sample_rate} Hz"
-            )
+        print_live_input_banner(live_input, self.audio_config)
 
         return self._stream_live_audio_with_rate(live_input=live_input)
 
@@ -390,7 +185,10 @@ class TranscriptionClient:
         live_input = None
         if self.options.simulate_filepath is None:
             try:
-                live_input = self._resolve_live_input_settings()
+                live_input = resolve_live_input_settings(
+                    self.audio_config,
+                    sound_device_id=self.options.sound_device_id,
+                )
             except RuntimeError as exc:
                 print(f"Audio input error: {exc}", file=sys.stderr)
                 return
@@ -414,37 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="gRPC transcription client")
     parser.add_argument("--host", type=str, default="localhost", help="gRPC server address")
     parser.add_argument("--port", type=int, default=50051, help="gRPC server port")
-    parser.add_argument(
-        "--all-updates",
-        action="store_true",
-        help="Print each response packet in a grouped block, including interim updates",
-    )
-    parser.add_argument(
-        "--simulate",
-        type=str,
-        default=None,
-        help="Simulation mode: path to the audio file used to simulate realtime streaming",
-    )
-    parser.add_argument(
-        "--live-preview",
-        action="store_true",
-        help="Display confirmed and interim text in a live preview view",
-    )
-    parser.add_argument(
-        "--chunk-duration",
-        type=float,
-        default=1.0,
-        help="Chunk duration in seconds for realtime streaming. Must be > 0",
-    )
-    parser.add_argument(
-        "--sound-device-id",
-        type=int,
-        default=None,
-        help=(
-            "ID of the sound device to use for live audio capture. If not specified, "
-            "the default input device will be used."
-        ),
-    )
+    add_common_client_args(parser)
     return parser
 
 
