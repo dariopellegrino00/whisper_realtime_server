@@ -5,14 +5,21 @@ package speech;
 
 option go_package = "example.com/speechpb;speechpb";
 
-// (float array) 
+// Raw audio payload. Encoding is declared in StreamingConfig.
 message AudioChunk {
   bytes audio_bytes = 1;
   // timestamp can be used to align the audio chunks and testing
 }
 
+enum AudioEncoding {
+  AUDIO_ENCODING_UNSPECIFIED = 0;
+  AUDIO_ENCODING_PCM_F32LE = 1;
+  AUDIO_ENCODING_PCM_S16LE = 2;
+}
+
 message StreamingConfig {
   int32 chunk_duration_millis = 1;
+  AudioEncoding encoding = 2;
 }
 
 message StreamingRecognizeRequest {

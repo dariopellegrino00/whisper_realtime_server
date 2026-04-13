@@ -6,6 +6,7 @@ from rapidfuzz import fuzz, utils
 logger = logging.getLogger(__name__)
 
 MAX_DEDUP_NGRAM_SIZE = 10
+DEDUP_MAX_FORWARD_GAP_SECONDS = 0.25
 
 
 class HypothesisBuffer:
@@ -39,7 +40,15 @@ class HypothesisBuffer:
             return
 
         start, _end, _text = self.new[0]
-        if abs(start - self.last_commited_time) >= 1 or not self.commited_in_buffer:
+        if not self.commited_in_buffer:
+            return
+
+        # Dedup should only handle decode overlap near the last committed boundary.
+        # A larger forward gap is more likely to be a real repetition than overlap.
+        if start > self.last_commited_time + DEDUP_MAX_FORWARD_GAP_SECONDS:
+            return
+
+        if self.last_commited_time - start >= 1:
             return
 
         committed_length = len(self.commited_in_buffer)

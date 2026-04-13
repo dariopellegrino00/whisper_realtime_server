@@ -27,14 +27,39 @@ class OnlineASRProcessor:
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
 
     def init(self, offset=None):
-        self.audio_buffer = np.array([], dtype=np.float32)
+        self._audio_chunks = []
+        self._cached_audio_buffer = None
         self.transcript_buffer = HypothesisBuffer(logfile=self.logfile, **self.kwargs)
         self.buffer_time_offset = 0 if offset is None else offset
         self.transcript_buffer.last_commited_time = self.buffer_time_offset
         self.commited = []
+        self._last_decoded_audio_end = None
+        self._update_serial = 0
+        self._last_emitted_update_serial = 0
+        self._last_committed_words = []
+
+    @property
+    def audio_buffer(self):
+        if self._cached_audio_buffer is None:
+            if not self._audio_chunks:
+                self._cached_audio_buffer = np.array([], dtype=np.float32)
+            elif len(self._audio_chunks) == 1:
+                self._cached_audio_buffer = self._audio_chunks[0]
+            else:
+                self._cached_audio_buffer = np.concatenate(self._audio_chunks)
+        return self._cached_audio_buffer
+
+    @audio_buffer.setter
+    def audio_buffer(self, value):
+        self._audio_chunks = [value]
+        self._cached_audio_buffer = value
 
     def insert_audio_chunk(self, audio):
-        self.audio_buffer = np.append(self.audio_buffer, audio)
+        self._audio_chunks.append(np.asarray(audio, dtype=np.float32))
+        self._cached_audio_buffer = None
+
+    def _current_audio_end(self):
+        return self.buffer_time_offset + (len(self.audio_buffer) / self.SAMPLING_RATE)
 
     def prompt(self):
         k = max(0, len(self.commited) - 1)
@@ -67,6 +92,9 @@ class OnlineASRProcessor:
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         committed = self.transcript_buffer.flush()
         self.commited.extend(committed)
+        self._last_committed_words = list(committed)
+        self._last_decoded_audio_end = self._current_audio_end()
+        self._update_serial += 1
         completed = self.to_flush(committed)
         logger.debug(">>>>COMPLETE NOW: %s", completed)
         remainder = self.to_flush(self.transcript_buffer.complete())
@@ -153,11 +181,22 @@ class OnlineASRProcessor:
         return output
 
     def finish(self):
-        remaining = self.transcript_buffer.complete()
-        flushed = self.to_flush(remaining)
+        flushed = self._finish_transcript()
         logger.debug("last, noncommited: %s", flushed)
         self.buffer_time_offset += len(self.audio_buffer) / self.SAMPLING_RATE
         return flushed
+
+    def _finish_transcript(self):
+        return self.to_flush(self.transcript_buffer.complete())
+
+    def has_audio_since_last_decode(self):
+        return len(self.audio_buffer) > 0 and (
+            self._last_decoded_audio_end is None
+            or self._current_audio_end() > self._last_decoded_audio_end
+        )
+
+    def mark_update_emitted(self):
+        self._last_emitted_update_serial = self._update_serial
 
     def to_flush(self, sents, sep=None, offset=0):
         if sep is None:
@@ -196,6 +235,9 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         self.transcript_buffer.insert(results, self.buffer_time_offset)
         committed = self.transcript_buffer.flush()
         self.commited.extend(committed)
+        self._last_committed_words = list(committed)
+        self._last_decoded_audio_end = self._current_audio_end()
+        self._update_serial += 1
 
         self._result = self.to_flush(committed)
         self.logger.debug(">>>>COMPLETE NOW: %s", self._result)
@@ -215,6 +257,14 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
     @property
     def results(self):
         return self._result
+
+    def _finish_transcript(self):
+        hypothesis_words = self.transcript_buffer.complete()
+        if self._update_serial <= self._last_emitted_update_serial:
+            if self._hypothesis is not None:
+                return self._hypothesis
+            return self.to_flush(hypothesis_words)
+        return self.to_flush([*self._last_committed_words, *hypothesis_words])
 
     def _chunk_buffer_at(self):
         k = len(self.commited) - 1

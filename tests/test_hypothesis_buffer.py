@@ -175,6 +175,42 @@ class TestInsertDedup:
         assert "hello" in new_texts
         assert "world" in new_texts
 
+    def test_insert_keeps_real_repetition_nearby_in_time(self):
+        """Do not mistake a nearby repeated phrase for decode overlap."""
+        buf = HypothesisBuffer()
+        buf.commited_in_buffer = [
+            (4.128, 4.988, " questa"),
+            (4.988, 5.108, " è"),
+            (5.108, 5.188, " una"),
+            (5.188, 5.528, " prova,"),
+        ]
+        buf.last_commited_time = 5.528
+
+        buf.insert(
+            [
+                (5.888, 7.308, " questa"),
+                (7.308, 7.428, " è"),
+                (7.428, 7.468, " una"),
+                (7.468, 7.768, " prova."),
+            ],
+            offset=0,
+        )
+
+        assert [word[2] for word in buf.new] == [" questa", " è", " una", " prova."]
+
+    def test_insert_dedup_still_applies_with_small_forward_jitter(self):
+        """Keep dedup active when the overlap starts slightly after the last commit."""
+        buf = HypothesisBuffer()
+        buf.commited_in_buffer = [(0.5, 1.0, "hello"), (1.0, 1.5, "world")]
+        buf.last_commited_time = 1.5
+
+        buf.insert(
+            [(1.55, 2.0, "world"), (2.0, 2.5, "again")],
+            offset=0,
+        )
+
+        assert [word[2] for word in buf.new] == ["again"]
+
 
 # Tests for the word confirmation (flush) logic
 

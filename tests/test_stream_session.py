@@ -37,6 +37,8 @@ sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
 
+from swim.transports.audio_encoding import PCM_F32_LE, PCM_S16_LE  # noqa: E402
+from swim.transports.grpc.audio_encoding import AUDIO_ENCODING_PCM_S16LE  # noqa: E402
 from swim.transports.grpc.session import SpeechStreamSession  # noqa: E402
 from tests.conftest import AsyncIterator  # noqa: E402
 
@@ -68,6 +70,7 @@ class FakeProcessorManager:
                 "results": None,
                 "hypothesis": None,
                 "chunk_duration_seconds": None,
+                "mark_update_emitted": lambda proc: None,
                 "insert_audio_chunk": lambda proc, audio: self.inserted_batches.append(audio),
             },
         )()
@@ -80,11 +83,13 @@ class FakeProcessorManager:
 
 
 class FakeRequest:
-    def __init__(self, *, config=None, audio_bytes=None):
+    def __init__(self, *, config=None, encoding=None, audio_bytes=None):
         self.config = None
         self.audio_chunk = None
         if config is not None:
             self.config = SimpleNamespace(chunk_duration_millis=config)
+            if encoding is not None:
+                self.config.encoding = encoding
         elif audio_bytes is not None:
             self.audio_chunk = SimpleNamespace(audio_bytes=audio_bytes)
 
@@ -133,6 +138,40 @@ def test_manage_first_message_sets_chunk_duration_and_max_chunk_bytes():
     asyncio.run(scenario())
 
 
+def test_manage_first_message_accepts_unspecified_encoding_as_pcm_f32le():
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(FakeRequest(config=500, encoding=0), FakeContext())
+        assert session.audio_encoding == PCM_F32_LE
+        assert session.max_chunk_bytes == 32000
+
+    asyncio.run(scenario())
+
+
+def test_manage_first_message_accepts_pcm_s16le_and_updates_max_chunk_bytes():
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(
+            FakeRequest(config=500, encoding=AUDIO_ENCODING_PCM_S16LE), FakeContext()
+        )
+        assert session.chunk_duration_millis == 500
+        assert session.audio_encoding == PCM_S16_LE
+        assert session.max_chunk_bytes == 16000
+
+    asyncio.run(scenario())
+
+
+def test_manage_first_message_rejects_unknown_encoding():
+    async def scenario():
+        session = make_session()
+        with pytest.raises(AbortCalled) as excinfo:
+            await session.manage_first_message(FakeRequest(config=500, encoding=999), FakeContext())
+        assert excinfo.value.code is StatusCode.INVALID_ARGUMENT
+        assert "encoding" in excinfo.value.details
+
+    asyncio.run(scenario())
+
+
 def test_consume_initial_audio_request_uses_same_validation():
     async def scenario():
         session = make_session()
@@ -143,6 +182,25 @@ def test_consume_initial_audio_request_uses_same_validation():
         )
         assert len(session.processor_manager.inserted_batches) == 1
         assert np.array_equal(session.processor_manager.inserted_batches[0], samples)
+
+    asyncio.run(scenario())
+
+
+def test_consume_initial_audio_request_decodes_pcm_s16le():
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(
+            FakeRequest(config=500, encoding=AUDIO_ENCODING_PCM_S16LE), FakeContext()
+        )
+        samples = np.array([16384, -8192], dtype=np.int16)
+        await session.consume_initial_audio_request(
+            FakeRequest(audio_bytes=samples.tobytes()), FakeContext()
+        )
+        assert len(session.processor_manager.inserted_batches) == 1
+        assert np.allclose(
+            session.processor_manager.inserted_batches[0],
+            np.array([0.5, -0.25], dtype=np.float32),
+        )
 
     asyncio.run(scenario())
 

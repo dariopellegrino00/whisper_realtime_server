@@ -34,6 +34,14 @@ class FakeProcessorManager:
         self._stream_session = stream_session
         self.insert_calls = 0
         self.get_transcription_calls = 0
+        self.processor = type(
+            "Processor",
+            (),
+            {
+                "pending_audio_since_last_decode": False,
+                "has_audio_since_last_decode": lambda proc: proc.pending_audio_since_last_decode,
+            },
+        )()
 
     @asynccontextmanager
     async def context(self):
@@ -89,6 +97,7 @@ class FakeStreamSession:
 class FakeServicer(BaseSpeechToTextServicer):
     def __init__(self, stream_session):
         self._fake_stream_session = stream_session
+        self.ready_calls = 0
         super().__init__(shared_asr=self, main_server_logger=logging.getLogger("test"))
 
     def StreamSessionType(self):
@@ -98,6 +107,7 @@ class FakeServicer(BaseSpeechToTextServicer):
         return self._fake_stream_session
 
     async def set_processor_ready(self, _id):
+        self.ready_calls += 1
         return None
 
 
@@ -133,6 +143,19 @@ class CancelAfterFirstItemIterator:
             self.yielded = True
             return self.first_item
         raise asyncio.CancelledError
+
+
+class FinalDecodeProcessorManager(FakeProcessorManager):
+    async def get_transcription(self):
+        self.get_transcription_calls += 1
+        self.processor.pending_audio_since_last_decode = self.get_transcription_calls == 1
+
+
+class FinalDecodeStreamSession(FakeStreamSession):
+    def __init__(self):
+        super().__init__()
+        self.processor_manager = FinalDecodeProcessorManager(self)
+        self.id = self.processor_manager.id
 
 
 # Start of tests for the BaseSpeechToTextServicer
@@ -193,6 +216,22 @@ def test_streaming_recognize_transcribes_initial_chunk_before_eof(run_test):
 
         assert stream_session.processor_manager.get_transcription_calls == 1
         assert stream_session.final_response_calls == 0
+
+    run_test(scenario())
+
+
+def test_streaming_recognize_runs_one_last_shared_decode_before_final_response(run_test):
+    async def scenario():
+        stream_session = FinalDecodeStreamSession()
+        servicer = FakeServicer(stream_session)
+        request_iterator = AsyncIterator([object(), object()])
+
+        async for _ in servicer.StreamingRecognize(request_iterator, context=None):
+            pass
+
+        assert servicer.ready_calls == 2
+        assert stream_session.processor_manager.get_transcription_calls == 2
+        assert stream_session.final_response_calls == 1
 
     run_test(scenario())
 

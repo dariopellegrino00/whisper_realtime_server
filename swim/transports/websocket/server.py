@@ -5,30 +5,53 @@ import itertools
 import logging
 import signal
 import sys
-from abc import ABC, abstractmethod
-from concurrent import futures
 
-import grpc
-from grpc import StatusCode, aio
+from websockets.asyncio.server import serve as websocket_serve
+from websockets.datastructures import Headers
+from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Response
 
-from swim.runtime import ParallelRealtimeASR, resolve_asr_backend
-from swim.transports.grpc.generated import speech_pb2_grpc
-from swim.transports.grpc.session import (
-    SpeechStreamSession,
-    StreamSession,
+from swim.runtime import ParallelOnlineASRProcessor, ParallelRealtimeASR, resolve_asr_backend
+from swim.transports.audio_encoding import (
+    SUPPORTED_AUDIO_ENCODINGS,
+    bytes_per_sample_for_encoding,
 )
 from swim.transports.grpc.stream_utils import (
     ProcessorManager,
     setup_application_logging,
     setup_stream_logger,
 )
+from swim.transports.websocket.messages import (
+    WEBSOCKET_TRANSCRIBE_PATH,
+    WebsocketProtocolError,
+    build_completed_event,
+    build_error_event,
+    parse_finish_message,
+)
+from swim.transports.websocket.session import WebsocketStreamSession
+
+DEFAULT_WEBSOCKET_MAX_SIZE_BYTES = 2**20
+MAX_BYTES_PER_SAMPLE = max(
+    bytes_per_sample_for_encoding(encoding) for encoding in SUPPORTED_AUDIO_ENCODINGS
+)
 
 
-# This base servicer keeps the gRPC transport boundary separate from the shared runtime.
-# The current API uses a single service, but this layer stays useful if we later expose
-# alternative gRPC surfaces, such as a Google STT-compatible adapter, on top of the
-# same stream/session orchestration.
-class BaseSpeechToTextServicer(ABC):
+def websocket_start_timeout_seconds(max_chunk_duration_seconds: float) -> float:
+    return max(max_chunk_duration_seconds * 2, 1.0)
+
+
+def websocket_max_message_size_bytes(max_chunk_duration_seconds: float) -> int:
+    expected_audio_bytes = int(
+        round(
+            ParallelOnlineASRProcessor.SAMPLING_RATE
+            * max_chunk_duration_seconds
+            * MAX_BYTES_PER_SAMPLE
+        )
+    )
+    return max(expected_audio_bytes, DEFAULT_WEBSOCKET_MAX_SIZE_BYTES)
+
+
+class WebsocketTranscriptionServer:
     _service_id = itertools.count()
     log_every_processor = False
     _logger_level = logging.DEBUG
@@ -37,12 +60,9 @@ class BaseSpeechToTextServicer(ABC):
         self._shared_asr = shared_asr
         self._main_server_logger = main_server_logger
         self._kwargs = kwargs
+        self._max_chunk_duration_seconds = kwargs.get("max_chunk_duration_seconds", 1.0)
 
-    @abstractmethod
-    def StreamSessionType(self) -> type[StreamSession]:
-        pass
-
-    def create_stream_session(self) -> StreamSession:
+    def create_stream_session(self) -> WebsocketStreamSession:
         stream_id = self.get_unique_name()
         logger = self.log_setup(stream_id)
         processor_manager = ProcessorManager(
@@ -52,7 +72,7 @@ class BaseSpeechToTextServicer(ABC):
             server_logger=self._main_server_logger,
             **self._kwargs,
         )
-        return self.StreamSessionType()(
+        return WebsocketStreamSession(
             processor_manager=processor_manager,
             server_logger=self._main_server_logger,
             logger=logger,
@@ -75,70 +95,81 @@ class BaseSpeechToTextServicer(ABC):
         chunk_duration_seconds = (stream_session.chunk_duration_millis or 1000) / 1000.0
         return max(chunk_duration_seconds * 2, 1.0)
 
-    async def StreamingRecognize(self, request_iterator, context):
-        stream_session = self.create_stream_session()
-        stream_id = stream_session.id
-        stream_logger = getattr(stream_session, "logger", self._main_server_logger)
+    def _start_timeout_seconds(self):
+        return websocket_start_timeout_seconds(self._max_chunk_duration_seconds)
 
-        stream_logger.info("Started connection on %s", stream_id)
+    async def _send_error_and_close(self, websocket, exc: WebsocketProtocolError):
+        try:
+            await websocket.send(build_error_event(exc.code, exc.message))
+        except ConnectionClosed:
+            return
+        await websocket.close(code=exc.close_code, reason=exc.message)
+
+    async def handle_connection(self, websocket):
+        stream_session = None
+        stream_id = "unassigned-websocket-stream"
+        stream_logger = self._main_server_logger
+        request_task = None
 
         try:
-            first_request = await request_iterator.__anext__()
-            await stream_session.manage_first_message(first_request, context)
             try:
-                first_audio_request = await asyncio.wait_for(
-                    request_iterator.__anext__(),
+                first_message = await asyncio.wait_for(
+                    websocket.recv(),
+                    timeout=self._start_timeout_seconds(),
+                )
+            except asyncio.TimeoutError as exc:
+                raise WebsocketProtocolError(
+                    "Client did not send the initial start event within "
+                    f"{self._start_timeout_seconds():.3f}s",
+                    code="deadline_exceeded",
+                ) from exc
+
+            stream_session = self.create_stream_session()
+            stream_id = stream_session.id
+            stream_logger = getattr(stream_session, "logger", self._main_server_logger)
+            stream_logger.info("Started websocket connection on %s", stream_id)
+            await stream_session.manage_start_message(first_message)
+            try:
+                first_audio_message = await asyncio.wait_for(
+                    websocket.recv(),
                     timeout=self._first_audio_timeout_seconds(stream_session),
                 )
-            except StopAsyncIteration:
+            except asyncio.TimeoutError as exc:
+                raise WebsocketProtocolError(
+                    f"{stream_id} did not send the first audio frame within "
+                    f"{self._first_audio_timeout_seconds(stream_session):.3f}s",
+                    code="deadline_exceeded",
+                ) from exc
+
+            if isinstance(first_audio_message, str):
+                parse_finish_message(first_audio_message)
                 stream_logger.info(
-                    "Service %s closed before sending the first audio chunk", stream_id
+                    "Client closed request stream for %s before sending audio",
+                    stream_id,
                 )
+                await websocket.send(build_completed_event())
+                await websocket.close(code=1000, reason="completed")
                 return
-            await stream_session.consume_initial_audio_request(first_audio_request, context)
-        except StopAsyncIteration:
-            stream_logger.info("Service %s closed prematurely by client", stream_id)
-            return
-        except asyncio.CancelledError:
-            stream_logger.info("RPC cancelled during startup for %s", stream_id)
-            raise
-        except asyncio.TimeoutError:
-            error_message = (
-                f"{stream_id} did not send the first audio chunk within "
-                f"{self._first_audio_timeout_seconds(stream_session):.3f}s"
-            )
-            stream_logger.warning(error_message)
-            await context.abort(
-                StatusCode.DEADLINE_EXCEEDED,
-                error_message,
-            )
-        except grpc.RpcError as exc:
-            if exc.code() == StatusCode.CANCELLED:
-                stream_logger.info("Client disconnected from %s during startup", stream_id)
-            else:
-                stream_logger.exception("gRPC error in %s during startup", stream_id)
-            raise
-        except Exception:
-            stream_logger.exception("Unhandled exception in %s during startup", stream_id)
-            raise
 
-        request_task = asyncio.create_task(
-            stream_session.request_enqueuer(request_iterator, context)
-        )
-        has_unsubmitted_audio = True
+            await stream_session.consume_initial_audio_message(first_audio_message)
 
-        try:
+            request_task = asyncio.create_task(stream_session.request_enqueuer(websocket))
+            has_unsubmitted_audio = True
+
             async with stream_session.processor_manager.context():
                 while not stream_session.processor_manager.is_finished():
-                    if (
-                        request_task.done()
-                        and stream_session.processor_manager.audio_queue.empty()
-                        and not has_unsubmitted_audio
-                    ):
-                        if stream_session.processor_manager.processor.has_audio_since_last_decode():
-                            await self._shared_asr.set_processor_ready(stream_id)
-                            await stream_session.processor_manager.get_transcription()
-                        break
+                    if request_task.done():
+                        task_error = request_task.exception()
+                        if task_error is not None:
+                            raise task_error
+                        if (
+                            stream_session.processor_manager.audio_queue.empty()
+                            and not has_unsubmitted_audio
+                        ):
+                            if stream_session.processor_manager.processor.has_audio_since_last_decode():
+                                await self._shared_asr.set_processor_ready(stream_id)
+                                await stream_session.processor_manager.get_transcription()
+                            break
 
                     if (
                         stream_session.processor_manager.audio_queue.empty()
@@ -156,26 +187,60 @@ class BaseSpeechToTextServicer(ABC):
                     if stream_session.processor_manager.is_finished():
                         break
 
-                    responses = stream_session.create_response()
-                    for response in responses:
-                        yield response
+                    for response in stream_session.create_response():
+                        await websocket.send(response)
+
+            if not stream_session.processor_manager.is_finished():
+                for response in stream_session.final_response():
+                    await websocket.send(response)
+
+            await websocket.send(build_completed_event())
+            await websocket.close(code=1000, reason="completed")
+        except ConnectionClosed:
+            stream_logger.info("Websocket closed for %s", stream_id)
+        except asyncio.CancelledError:
+            stream_logger.info("Websocket handler cancelled for %s", stream_id)
+            raise
+        except WebsocketProtocolError as exc:
+            stream_logger.warning("Protocol error in %s: %s", stream_id, exc.message)
+            await self._send_error_and_close(websocket, exc)
+        except Exception:
+            stream_logger.exception("Unhandled websocket exception in %s", stream_id)
+            await self._send_error_and_close(
+                websocket,
+                WebsocketProtocolError(
+                    "Internal server error",
+                    code="internal_error",
+                    close_code=1011,
+                ),
+            )
         finally:
-            if not request_task.done():
+            if request_task is not None and not request_task.done():
                 request_task.cancel()
-            try:
-                await request_task
-            except asyncio.CancelledError:
-                pass
+            if request_task is not None:
+                try:
+                    await request_task
+                except (asyncio.CancelledError, ConnectionClosed, WebsocketProtocolError):
+                    pass
+                except Exception:
+                    stream_logger.exception(
+                        "Unexpected error in request enqueuer cleanup for %s", stream_id
+                    )
 
-        if not stream_session.processor_manager.is_finished():
-            final_responses = stream_session.final_response()
-            for response in final_responses:
-                yield response
+
+def _build_not_found_response():
+    return Response(
+        404,
+        "Not Found",
+        Headers({"Content-Type": "text/plain; charset=utf-8"}),
+        b"Not Found\n",
+    )
 
 
-class SpeechToTextServicer(BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer):
-    def StreamSessionType(self) -> type[StreamSession]:
-        return SpeechStreamSession
+async def _process_request(_connection, request):
+    if request.path != WEBSOCKET_TRANSCRIBE_PATH:
+        return _build_not_found_response()
+    return None
 
 
 async def serve(args):
@@ -190,12 +255,12 @@ async def serve(args):
 
     app_logger = setup_application_logging(level=log_level, use_stdout=True)
     server_logger = app_logger.getChild("server")
-    BaseSpeechToTextServicer._logger_level = log_level
+    WebsocketTranscriptionServer._logger_level = log_level
 
-    server_logger.info("Starting server...")
+    server_logger.info("Starting websocket server...")
 
     if args.log_every_processor:
-        BaseSpeechToTextServicer.log_every_processor = True
+        WebsocketTranscriptionServer.log_every_processor = True
         server_logger.warning(
             "Per-stream file logging enabled. Debug-only: busy or long-running servers "
             "can keep many log files open and create many files."
@@ -243,16 +308,6 @@ async def serve(args):
     server_logger.info("Model loaded")
 
     await shared_asr.start()
-    server = aio.server(
-        futures.ThreadPoolExecutor(max_workers=args.max_workers),
-        maximum_concurrent_rpcs=args.max_workers,
-        options=[
-            ("grpc.keepalive_time_ms", 1000),
-            ("grpc.keepalive_timeout_ms", 1000),
-            ("grpc.keepalive_permit_without_calls", True),
-        ],
-    )
-
     processor_args = {
         "use_fallback": args.fallback,
         "fallback_threshold": args.fallback_threshold,
@@ -261,17 +316,7 @@ async def serve(args):
         "buffer_trimming_sec": args.buffer_trimming_sec,
         "max_chunk_duration_seconds": args.max_chunk_duration_seconds,
     }
-
-    speech_pb2_grpc.add_SpeechToTextServicer_to_server(
-        SpeechToTextServicer(shared_asr, server_logger, **processor_args),
-        server,
-    )
-
-    for port in args.ports:
-        server.add_insecure_port(f"[::]:{port}")
-
-    await server.start()
-    server_logger.info("Server started")
+    transport_server = WebsocketTranscriptionServer(shared_asr, server_logger, **processor_args)
 
     shutdown_event = asyncio.Event()
 
@@ -290,24 +335,35 @@ async def serve(args):
             "Signal handlers are not supported on this platform. Use Ctrl+C to stop the server."
         )
 
-    try:
-        if wait_for_signal:
-            await shutdown_event.wait()
-        else:
-            await server.wait_for_termination()
-    finally:
-        server_logger.info("Stopping ASR...")
-        await shared_asr.stop()
-        server_logger.info("ASR stopped")
-
-        server_logger.info("Stopping gRPC server...")
-        await server.stop(0)
-        server_logger.info("Server stopped")
+    async with websocket_serve(
+        transport_server.handle_connection,
+        args.host,
+        args.port,
+        process_request=_process_request,
+        compression=None,
+        logger=server_logger,
+        max_size=websocket_max_message_size_bytes(args.max_chunk_duration_seconds),
+    ):
+        server_logger.info(
+            "Websocket server started on %s:%s%s",
+            args.host,
+            args.port,
+            WEBSOCKET_TRANSCRIBE_PATH,
+        )
+        try:
+            if wait_for_signal:
+                await shutdown_event.wait()
+            else:
+                await asyncio.Future()
+        finally:
+            server_logger.info("Stopping ASR...")
+            await shared_asr.stop()
+            server_logger.info("ASR stopped")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Argument parser for the whisper-realtime-server",
+        description="Argument parser for the swim websocket server",
         allow_abbrev=False,
     )
     parser.add_argument(
@@ -345,17 +401,20 @@ def build_parser():
         "--max-chunk-duration-seconds",
         type=float,
         default=1.0,
-        help="Maximum chunk duration accepted from a client session config",
+        help="Maximum chunk duration accepted from a client start message",
     )
-
     parser.add_argument(
-        "--ports",
-        type=int,
-        nargs="+",
-        default=[50051],
-        help="Ports to run the server on",
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host interface to bind the websocket server to",
     )
-    parser.add_argument("--max-workers", type=int, default=20, help="Max workers for the server")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to run the websocket server on",
+    )
     parser.add_argument(
         "--log-every-processor",
         action="store_true",
@@ -364,7 +423,6 @@ def build_parser():
             "can keep many log files open and create many files."
         ),
     )
-
     parser.add_argument(
         "--model",
         type=str,
@@ -372,7 +430,7 @@ def build_parser():
         choices="tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo".split(
             ","
         ),
-        help="Name size of the Whisper model to use (default: large-v2). The model is automatically downloaded from the model hub if not present in model cache dir",
+        help="Name size of the Whisper model to use (default: large-v3-turbo). The model is automatically downloaded from the model hub if not present in model cache dir",
     )
     parser.add_argument(
         "--model-cache-dir",
@@ -392,7 +450,6 @@ def build_parser():
         default="resources/sample1.wav",
         help="File to warm up the model and speed up the first request",
     )
-
     parser.add_argument(
         "--lan",
         type=str,
@@ -420,11 +477,3 @@ def build_parser():
         help="Log level for the server and shared ASR logger (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
     return parser
-
-
-def main():
-    parser = build_parser()
-    try:
-        asyncio.run(serve(parser.parse_args()))
-    except KeyboardInterrupt:
-        pass

@@ -3,14 +3,17 @@ import logging
 from abc import ABC, abstractmethod
 
 import grpc
-import numpy as np
 from grpc import StatusCode
 
 from swim.runtime import ParallelOnlineASRProcessor
+from swim.transports.audio_encoding import (
+    PCM_F32_LE,
+    bytes_per_sample_for_encoding,
+    decode_audio_bytes,
+)
+from swim.transports.grpc.audio_encoding import normalize_proto_audio_encoding
 from swim.transports.grpc.generated import speech_pb2 as whisp_speech
 from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
-
-BYTES_PER_SAMPLE = 4
 
 
 class StreamSession(ABC):
@@ -51,6 +54,7 @@ class SpeechStreamSession(StreamSession):
             "confirmed": TranscriptionManager(),
             "interim": TranscriptionManager(),
         }
+        self.audio_encoding = PCM_F32_LE
 
     async def _parse_audio_request(self, request, context):
         if request.WhichOneof("payload") != "audio_chunk":
@@ -64,7 +68,13 @@ class SpeechStreamSession(StreamSession):
                 StatusCode.INVALID_ARGUMENT,
                 "Audio chunk exceeds the configured chunk_duration_ms",
             )
-        return np.frombuffer(audio_bytes, dtype=np.float32)
+        try:
+            return decode_audio_bytes(audio_bytes, self.audio_encoding)
+        except ValueError:
+            await context.abort(
+                StatusCode.INVALID_ARGUMENT,
+                "Audio chunk encoding does not match the accepted stream config",
+            )
 
     async def enqueue_audio_request(self, request, context):
         audio_samples = await self._parse_audio_request(request, context)
@@ -105,16 +115,28 @@ class SpeechStreamSession(StreamSession):
                 f"chunk_duration_millis must be > 0 and <= {self.max_chunk_duration_millis}",
             )
 
+        try:
+            requested_encoding = normalize_proto_audio_encoding(
+                getattr(first_request.config, "encoding", 0)
+            )
+        except ValueError:
+            await context.abort(
+                StatusCode.INVALID_ARGUMENT,
+                "encoding must be one of: AUDIO_ENCODING_PCM_F32LE, AUDIO_ENCODING_PCM_S16LE",
+            )
+
         self.chunk_duration_millis = chunk_duration_millis
+        self.audio_encoding = requested_encoding
         self.max_chunk_bytes = int(
             ParallelOnlineASRProcessor.SAMPLING_RATE
             * (chunk_duration_millis / 1000.0)
-            * BYTES_PER_SAMPLE
+            * bytes_per_sample_for_encoding(self.audio_encoding)
         )
         self.processor_manager.processor.chunk_duration_seconds = chunk_duration_millis / 1000.0
         self.logger.debug(
-            "Accepted stream config: chunk_duration_millis=%s max_chunk_bytes=%s",
+            "Accepted stream config: chunk_duration_millis=%s encoding=%s max_chunk_bytes=%s",
             self.chunk_duration_millis,
+            self.audio_encoding,
             self.max_chunk_bytes,
         )
 
@@ -127,14 +149,16 @@ class SpeechStreamSession(StreamSession):
         has_interim, interim_fmt = self.transcription_managers["interim"].format_transcript(
             interim, use_last_end=False
         )
-        if not has_confirmed and not has_interim:
-            return []
-        return [
-            self._create_response(
-                confirmed_fmt if has_confirmed else None,
-                interim_fmt if has_interim else None,
+        responses = []
+        if has_confirmed or has_interim:
+            responses.append(
+                self._create_response(
+                    confirmed_fmt if has_confirmed else None,
+                    interim_fmt if has_interim else None,
+                )
             )
-        ]
+        self.processor_manager.processor.mark_update_emitted()
+        return responses
 
     def final_response(self):
         results = self.processor_manager.processor.finish()
