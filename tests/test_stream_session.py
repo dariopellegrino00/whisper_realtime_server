@@ -68,6 +68,7 @@ class FakeProcessorManager:
                 "results": None,
                 "hypothesis": None,
                 "chunk_duration_seconds": None,
+                "mark_update_emitted": lambda proc: None,
                 "insert_audio_chunk": lambda proc, audio: self.inserted_batches.append(audio),
             },
         )()

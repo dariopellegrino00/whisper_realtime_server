@@ -29,9 +29,16 @@ class FakeProcessor:
         self.hypothesis = None
         self.chunk_duration_seconds = None
         self.timed_out = False
+        self.pending_audio_since_last_decode = False
 
     def finish(self):
         return self.results
+
+    def mark_update_emitted(self):
+        return None
+
+    def has_audio_since_last_decode(self):
+        return self.pending_audio_since_last_decode
 
 
 class FakeProcessorManager:
@@ -73,7 +80,11 @@ class FakeWebsocket:
 
 
 class FakeSharedASR:
+    def __init__(self):
+        self.ready_calls = 0
+
     async def set_processor_ready(self, _stream_id):
+        self.ready_calls += 1
         return None
 
 
@@ -95,6 +106,7 @@ class FakeServerSession:
         self.id = self.processor_manager.id
         self.logger = logging.getLogger("test-stream")
         self.chunk_duration_millis = 500
+        self.final_response_calls = 0
 
     async def manage_start_message(self, _first_message):
         return None
@@ -109,6 +121,7 @@ class FakeServerSession:
         return []
 
     def final_response(self):
+        self.final_response_calls += 1
         return []
 
 
@@ -134,6 +147,30 @@ class FakeWebsocketServer(WebsocketTranscriptionServer):
 
 def make_session():
     return WebsocketStreamSession(FakeProcessorManager())
+
+
+class FinalDecodeServerProcessorManager(FakeServerProcessorManager):
+    async def get_transcription(self):
+        self.processor.pending_audio_since_last_decode = self.processor.results is None
+        self.processor.results = (0.0, 0.5, "confirmed")
+        self.processor.hypothesis = (
+            (0.5, 1.0, "tail") if self.processor.pending_audio_since_last_decode else None
+        )
+
+
+class FinalDecodeServerSession(FakeServerSession):
+    def __init__(self):
+        super().__init__()
+        self.processor_manager = FinalDecodeServerProcessorManager()
+        self.id = self.processor_manager.id
+
+    async def request_enqueuer(self, websocket):
+        while True:
+            message = await websocket.recv()
+            if isinstance(message, str):
+                parse_finish_message(message)
+                self.processor_manager.mark_stream_closed()
+                return
 
 
 def test_parse_start_message_accepts_expected_payload():
@@ -407,6 +444,27 @@ def test_handle_connection_allows_finish_before_first_audio():
         await server.handle_connection(websocket)
 
         assert websocket.sent_messages == [(build_completed_event(), True)]
+        assert websocket.closed == (1000, "completed")
+
+    asyncio.run(scenario())
+
+
+def test_handle_connection_runs_one_last_shared_decode_before_final_response():
+    async def scenario():
+        session = FinalDecodeServerSession()
+        server = FakeWebsocketServer(session=session)
+        websocket = FakeWebsocket(
+            [
+                '{"type":"start"}',
+                np.array([1], dtype="<i2").tobytes(),
+                json.dumps({"type": "finish"}),
+            ]
+        )
+
+        await server.handle_connection(websocket)
+
+        assert server._shared_asr.ready_calls == 2
+        assert session.final_response_calls == 1
         assert websocket.closed == (1000, "completed")
 
     asyncio.run(scenario())

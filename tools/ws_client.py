@@ -157,15 +157,7 @@ class WebsocketTranscriptionClient:
         clipped = np.clip(samples, -1.0, 1.0)
         return bytes(np.rint(clipped * 32767.0).astype("<i2").tobytes())
 
-    async def _send_simulated_audio(self, websocket) -> None:
-        assert self.options.simulate_filepath is not None
-
-        normalized_audio = load_simulated_audio(
-            self.options.simulate_filepath,
-            self.audio_config.sample_rate,
-        )
-        print(f"Loaded {len(normalized_audio)} samples from file {self.options.simulate_filepath}")
-
+    async def _send_simulated_audio(self, websocket, normalized_audio) -> None:
         await websocket.send(self._start_message(), text=True)
         for start in range(0, len(normalized_audio), self.audio_config.chunk_size()):
             chunk_samples = normalized_audio[start : start + self.audio_config.chunk_size()]
@@ -180,9 +172,16 @@ class WebsocketTranscriptionClient:
                 chunk = await asyncio.to_thread(producer.read_chunk)
                 await websocket.send(self._encode_audio_chunk(chunk))
 
-    async def _send_audio_stream(self, websocket, live_input: LiveInputSettings | None) -> None:
+    async def _send_audio_stream(
+        self,
+        websocket,
+        live_input: LiveInputSettings | None,
+        simulated_audio=None,
+    ) -> None:
         if self.options.simulate_filepath:
-            await self._send_simulated_audio(websocket)
+            if simulated_audio is None:
+                raise RuntimeError("Simulated audio must be loaded before opening the websocket.")
+            await self._send_simulated_audio(websocket, simulated_audio)
             return
 
         if live_input is None:
@@ -215,6 +214,7 @@ class WebsocketTranscriptionClient:
 
     async def run(self) -> None:
         live_input = None
+        simulated_audio = None
         if self.options.simulate_filepath is None:
             try:
                 live_input = resolve_live_input_settings(
@@ -224,13 +224,24 @@ class WebsocketTranscriptionClient:
             except RuntimeError as exc:
                 print(f"Audio input error: {exc}", file=sys.stderr)
                 return
+        else:
+            simulated_audio = load_simulated_audio(
+                self.options.simulate_filepath,
+                self.audio_config.sample_rate,
+            )
 
         uri = f"ws://{self.options.host}:{self.options.port}{self.options.path}"
         print("Started connection")
+        if simulated_audio is not None:
+            print(
+                f"Loaded {len(simulated_audio)} samples from file {self.options.simulate_filepath}"
+            )
 
         try:
             async with connect(uri, compression=None) as websocket:
-                sender_task = asyncio.create_task(self._send_audio_stream(websocket, live_input))
+                sender_task = asyncio.create_task(
+                    self._send_audio_stream(websocket, live_input, simulated_audio)
+                )
                 try:
                     await self._receive_events(websocket)
                 finally:

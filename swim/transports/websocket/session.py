@@ -106,14 +106,16 @@ class WebsocketStreamSession:
         has_interim, interim_fmt = self.transcription_managers["interim"].format_transcript(
             interim, use_last_end=False
         )
-        if not has_confirmed and not has_interim:
-            return []
-        return [
-            build_transcript_event(
-                confirmed_fmt if has_confirmed else None,
-                interim_fmt if has_interim else None,
+        responses = []
+        if has_confirmed or has_interim:
+            responses.append(
+                build_transcript_event(
+                    confirmed_fmt if has_confirmed else None,
+                    interim_fmt if has_interim else None,
+                )
             )
-        ]
+        self.processor_manager.processor.mark_update_emitted()
+        return responses
 
     def final_response(self):
         results = self.processor_manager.processor.finish()

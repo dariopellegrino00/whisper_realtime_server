@@ -135,6 +135,9 @@ class BaseSpeechToTextServicer(ABC):
                         and stream_session.processor_manager.audio_queue.empty()
                         and not has_unsubmitted_audio
                     ):
+                        if stream_session.processor_manager.processor.has_audio_since_last_decode():
+                            await self._shared_asr.set_processor_ready(stream_id)
+                            await stream_session.processor_manager.get_transcription()
                         break
 
                     if (

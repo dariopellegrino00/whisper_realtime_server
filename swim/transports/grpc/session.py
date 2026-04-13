@@ -127,14 +127,16 @@ class SpeechStreamSession(StreamSession):
         has_interim, interim_fmt = self.transcription_managers["interim"].format_transcript(
             interim, use_last_end=False
         )
-        if not has_confirmed and not has_interim:
-            return []
-        return [
-            self._create_response(
-                confirmed_fmt if has_confirmed else None,
-                interim_fmt if has_interim else None,
+        responses = []
+        if has_confirmed or has_interim:
+            responses.append(
+                self._create_response(
+                    confirmed_fmt if has_confirmed else None,
+                    interim_fmt if has_interim else None,
+                )
             )
-        ]
+        self.processor_manager.processor.mark_update_emitted()
+        return responses
 
     def final_response(self):
         results = self.processor_manager.processor.finish()
