@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from swim.transports.websocket.messages import (
+    PCM_F32_LE,
+    PCM_S16_LE,
     WebsocketProtocolError,
     build_completed_event,
     build_error_event,
@@ -189,9 +191,10 @@ def test_parse_start_message_accepts_expected_payload():
     parsed = parse_start_message(message, max_chunk_duration_millis=1000)
 
     assert parsed.chunk_duration_millis == 500
+    assert parsed.encoding == PCM_S16_LE
 
 
-def test_parse_start_message_rejects_wrong_audio_format():
+def test_parse_start_message_accepts_pcm_f32le():
     message = json.dumps(
         {
             "type": "start",
@@ -204,10 +207,28 @@ def test_parse_start_message_rejects_wrong_audio_format():
         }
     )
 
+    parsed = parse_start_message(message, max_chunk_duration_millis=1000)
+
+    assert parsed.encoding == PCM_F32_LE
+
+
+def test_parse_start_message_rejects_wrong_audio_format():
+    message = json.dumps(
+        {
+            "type": "start",
+            "chunk_duration_millis": 500,
+            "audio_format": {
+                "encoding": "pcm_u8",
+                "sample_rate_hz": 16000,
+                "channels": 1,
+            },
+        }
+    )
+
     with pytest.raises(WebsocketProtocolError) as excinfo:
         parse_start_message(message, max_chunk_duration_millis=1000)
 
-    assert "pcm_s16le" in excinfo.value.message
+    assert "pcm_s16le or pcm_f32le" in excinfo.value.message
 
 
 def test_parse_finish_message_rejects_non_finish_event():
@@ -234,8 +255,31 @@ def test_manage_start_message_sets_chunk_duration_and_max_chunk_bytes():
             )
         )
         assert session.chunk_duration_millis == 500
+        assert session.audio_encoding == PCM_S16_LE
         assert session.processor_manager.processor.chunk_duration_seconds == 0.5
         assert session.max_chunk_bytes == 16000
+
+    asyncio.run(scenario())
+
+
+def test_manage_start_message_accepts_pcm_f32le_and_updates_max_chunk_bytes():
+    async def scenario():
+        session = make_session()
+        await session.manage_start_message(
+            json.dumps(
+                {
+                    "type": "start",
+                    "chunk_duration_millis": 500,
+                    "audio_format": {
+                        "encoding": PCM_F32_LE,
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                    },
+                }
+            )
+        )
+        assert session.audio_encoding == PCM_F32_LE
+        assert session.max_chunk_bytes == 32000
 
     asyncio.run(scenario())
 
@@ -286,6 +330,29 @@ def test_parse_audio_message_uses_little_endian_int16():
         samples = np.array([8192, -16384], dtype="<i2")
         parsed = session._parse_audio_message(samples.tobytes())
         assert np.allclose(parsed, np.array([0.25, -0.5], dtype=np.float32))
+
+    asyncio.run(scenario())
+
+
+def test_parse_audio_message_accepts_pcm_f32le():
+    async def scenario():
+        session = make_session()
+        await session.manage_start_message(
+            json.dumps(
+                {
+                    "type": "start",
+                    "chunk_duration_millis": 500,
+                    "audio_format": {
+                        "encoding": PCM_F32_LE,
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                    },
+                }
+            )
+        )
+        samples = np.array([0.25, -0.5], dtype=np.float32)
+        parsed = session._parse_audio_message(samples.tobytes())
+        assert np.allclose(parsed, samples)
 
     asyncio.run(scenario())
 

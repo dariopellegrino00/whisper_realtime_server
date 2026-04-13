@@ -13,6 +13,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from swim.transports.websocket.messages import (
+    PCM_F32_LE,
     PCM_S16_LE,
     WEBSOCKET_TRANSCRIBE_PATH,
 )
@@ -37,6 +38,7 @@ class ClientOptions:
     host: str
     port: int
     path: str
+    audio_encoding: str
     all_updates: bool
     simulate_filepath: str | None
     live_preview: bool
@@ -144,7 +146,7 @@ class WebsocketTranscriptionClient:
                 "type": "start",
                 "chunk_duration_millis": self.audio_config.chunk_duration_millis,
                 "audio_format": {
-                    "encoding": PCM_S16_LE,
+                    "encoding": self.options.audio_encoding,
                     "sample_rate_hz": self.audio_config.sample_rate,
                     "channels": self.audio_config.channels,
                 },
@@ -152,10 +154,11 @@ class WebsocketTranscriptionClient:
             separators=(",", ":"),
         )
 
-    @staticmethod
-    def _encode_audio_chunk(samples) -> bytes:
+    def _encode_audio_chunk(self, samples) -> bytes:
         clipped = np.clip(samples, -1.0, 1.0)
-        return bytes(np.rint(clipped * 32767.0).astype("<i2").tobytes())
+        if self.options.audio_encoding == PCM_F32_LE:
+            return bytes(clipped.astype(np.float32).tobytes())
+        return bytes(np.rint(clipped * 32767.0).astype(np.int16).tobytes())
 
     async def _send_simulated_audio(self, websocket, normalized_audio) -> None:
         await websocket.send(self._start_message(), text=True)
@@ -267,6 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=WEBSOCKET_TRANSCRIBE_PATH,
         help="Websocket endpoint path",
     )
+    parser.add_argument(
+        "--audio-encoding",
+        type=str,
+        choices=(PCM_F32_LE, PCM_S16_LE),
+        default=PCM_S16_LE,
+        help="Wire encoding for outbound websocket audio chunks",
+    )
     add_common_client_args(parser)
     return parser
 
@@ -286,6 +296,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         path=args.path,
+        audio_encoding=args.audio_encoding,
         all_updates=args.all_updates,
         simulate_filepath=args.simulate,
         live_preview=args.live_preview,

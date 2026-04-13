@@ -169,6 +169,7 @@ If you followed the `Building with Docker` section and you want to run the clien
    ```
    --host HOST          gRPC server address
    --port PORT          gRPC server port
+   --audio-encoding     Wire encoding for outbound gRPC audio chunks (`pcm_s16le` or `pcm_f32le`)
    --all-updates        Print each response packet in a grouped block, including interim updates
    --simulate SIMULATE  Simulation mode: Path to the audio file to simulate a realtime audio
                         stream with
@@ -178,6 +179,7 @@ If you followed the `Building with Docker` section and you want to run the clien
    ```
 
    The first streaming message must be a session config. The client sends `chunk_duration` there, and the server accepts values up to `--max-chunk-duration-seconds` (default `1.0`). In practice, a `chunk_duration` around `0.4s` to `1.0s` works best for this shared realtime setup.
+   The gRPC test client now defaults to `pcm_s16le` on the wire to halve the audio payload size; the server still accepts older `pcm_f32le` clients for compatibility. If you need to talk to an older server that only understands float32 chunks, run the client with `--audio-encoding pcm_f32le`.
 
       Example with confirmed-only output:
 
@@ -357,7 +359,7 @@ The first client message must be a JSON `start` event:
 
 After that:
 
-- the client sends binary audio frames containing mono `pcm_s16le` at `16000` Hz
+- the client sends binary audio frames containing mono `pcm_s16le` or `pcm_f32le` at `16000` Hz
 - the client closes its send side logically with a JSON `finish` event
 
 Server events are JSON text frames. The main event is `transcript`:

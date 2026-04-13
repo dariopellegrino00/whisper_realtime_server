@@ -81,11 +81,13 @@ class FakeProcessorManager:
 
 
 class FakeRequest:
-    def __init__(self, *, config=None, audio_bytes=None):
+    def __init__(self, *, config=None, encoding=None, audio_bytes=None):
         self.config = None
         self.audio_chunk = None
         if config is not None:
             self.config = SimpleNamespace(chunk_duration_millis=config)
+            if encoding is not None:
+                self.config.encoding = encoding
         elif audio_bytes is not None:
             self.audio_chunk = SimpleNamespace(audio_bytes=audio_bytes)
 
@@ -134,6 +136,28 @@ def test_manage_first_message_sets_chunk_duration_and_max_chunk_bytes():
     asyncio.run(scenario())
 
 
+def test_manage_first_message_accepts_pcm_s16le_and_updates_max_chunk_bytes():
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(FakeRequest(config=500, encoding=2), FakeContext())
+        assert session.chunk_duration_millis == 500
+        assert session.audio_encoding == 2
+        assert session.max_chunk_bytes == 16000
+
+    asyncio.run(scenario())
+
+
+def test_manage_first_message_rejects_unknown_encoding():
+    async def scenario():
+        session = make_session()
+        with pytest.raises(AbortCalled) as excinfo:
+            await session.manage_first_message(FakeRequest(config=500, encoding=999), FakeContext())
+        assert excinfo.value.code is StatusCode.INVALID_ARGUMENT
+        assert "encoding" in excinfo.value.details
+
+    asyncio.run(scenario())
+
+
 def test_consume_initial_audio_request_uses_same_validation():
     async def scenario():
         session = make_session()
@@ -144,6 +168,23 @@ def test_consume_initial_audio_request_uses_same_validation():
         )
         assert len(session.processor_manager.inserted_batches) == 1
         assert np.array_equal(session.processor_manager.inserted_batches[0], samples)
+
+    asyncio.run(scenario())
+
+
+def test_consume_initial_audio_request_decodes_pcm_s16le():
+    async def scenario():
+        session = make_session()
+        await session.manage_first_message(FakeRequest(config=500, encoding=2), FakeContext())
+        samples = np.array([16384, -8192], dtype="<i2")
+        await session.consume_initial_audio_request(
+            FakeRequest(audio_bytes=samples.tobytes()), FakeContext()
+        )
+        assert len(session.processor_manager.inserted_batches) == 1
+        assert np.allclose(
+            session.processor_manager.inserted_batches[0],
+            np.array([0.5, -0.25], dtype=np.float32),
+        )
 
     asyncio.run(scenario())
 

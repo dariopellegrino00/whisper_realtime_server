@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import grpc
+import numpy as np
 import numpy.typing as npt
 
 from swim.transports.grpc.generated import speech_pb2, speech_pb2_grpc
@@ -28,12 +29,19 @@ PB2: Any = speech_pb2
 PB2_GRPC: Any = speech_pb2_grpc
 LIVE_PREVIEW_INTERIM_COLOR = "38;5;215"
 ALL_UPDATES_SEPARATOR = "--------------------"
+PCM_F32_LE = "pcm_f32le"
+PCM_S16_LE = "pcm_s16le"
+PROTO_AUDIO_ENCODINGS = {
+    PCM_F32_LE: getattr(PB2, "AUDIO_ENCODING_PCM_F32LE", 1),
+    PCM_S16_LE: getattr(PB2, "AUDIO_ENCODING_PCM_S16LE", 2),
+}
 
 
 @dataclass(frozen=True, slots=True)
 class ClientOptions:
     host: str
     port: int
+    audio_encoding: str
     all_updates: bool
     simulate_filepath: str | None
     live_preview: bool
@@ -136,14 +144,19 @@ class TranscriptionClient:
         return PB2.StreamingRecognizeRequest(
             config=PB2.StreamingConfig(
                 chunk_duration_millis=self.audio_config.chunk_duration_millis,
+                encoding=PROTO_AUDIO_ENCODINGS[self.options.audio_encoding],
             )
         )
 
     def _build_audio_request(self, samples: npt.ArrayLike) -> Any:
         normalized_samples = normalize_samples(samples)
-        return PB2.StreamingRecognizeRequest(
-            audio_chunk=PB2.AudioChunk(audio_bytes=normalized_samples.tobytes())
-        )
+        if self.options.audio_encoding == PCM_S16_LE:
+            audio_bytes = bytes(
+                np.rint(np.clip(normalized_samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+            )
+        else:
+            audio_bytes = normalized_samples.tobytes()
+        return PB2.StreamingRecognizeRequest(audio_chunk=PB2.AudioChunk(audio_bytes=audio_bytes))
 
     def _stream_simulated_audio(self) -> Any:
         assert self.options.simulate_filepath is not None
@@ -212,6 +225,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="gRPC transcription client")
     parser.add_argument("--host", type=str, default="localhost", help="gRPC server address")
     parser.add_argument("--port", type=int, default=50051, help="gRPC server port")
+    parser.add_argument(
+        "--audio-encoding",
+        type=str,
+        choices=(PCM_F32_LE, PCM_S16_LE),
+        default=PCM_S16_LE,
+        help="Wire encoding for outbound gRPC audio chunks",
+    )
     add_common_client_args(parser)
     return parser
 
@@ -230,6 +250,7 @@ def main() -> None:
     options = ClientOptions(
         host=args.host,
         port=args.port,
+        audio_encoding=args.audio_encoding,
         all_updates=args.all_updates,
         simulate_filepath=args.simulate,
         live_preview=args.live_preview,

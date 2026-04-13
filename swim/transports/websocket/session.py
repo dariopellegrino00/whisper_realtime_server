@@ -6,13 +6,18 @@ from websockets.exceptions import ConnectionClosed
 from swim.runtime import ParallelOnlineASRProcessor
 from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
 from swim.transports.websocket.messages import (
+    PCM_F32_LE,
+    PCM_S16_LE,
     WebsocketProtocolError,
     build_transcript_event,
     parse_finish_message,
     parse_start_message,
 )
 
-BYTES_PER_SAMPLE = 2
+BYTES_PER_SAMPLE = {
+    PCM_F32_LE: 4,
+    PCM_S16_LE: 2,
+}
 
 
 class WebsocketStreamSession:
@@ -32,6 +37,7 @@ class WebsocketStreamSession:
             "confirmed": TranscriptionManager(),
             "interim": TranscriptionManager(),
         }
+        self.audio_encoding = PCM_F32_LE
 
     async def manage_start_message(self, first_message):
         if not isinstance(first_message, str):
@@ -42,17 +48,19 @@ class WebsocketStreamSession:
             max_chunk_duration_millis=self.max_chunk_duration_millis,
         )
         self.chunk_duration_millis = start_message.chunk_duration_millis
+        self.audio_encoding = start_message.encoding
         self.max_chunk_bytes = int(
             ParallelOnlineASRProcessor.SAMPLING_RATE
             * (self.chunk_duration_millis / 1000.0)
-            * BYTES_PER_SAMPLE
+            * BYTES_PER_SAMPLE[self.audio_encoding]
         )
         self.processor_manager.processor.chunk_duration_seconds = (
             self.chunk_duration_millis / 1000.0
         )
         self.logger.debug(
-            "Accepted websocket start: chunk_duration_millis=%s max_chunk_bytes=%s",
+            "Accepted websocket start: chunk_duration_millis=%s encoding=%s max_chunk_bytes=%s",
             self.chunk_duration_millis,
+            self.audio_encoding,
             self.max_chunk_bytes,
         )
 
@@ -65,11 +73,13 @@ class WebsocketStreamSession:
         if self.max_chunk_bytes is not None and len(audio_bytes) > self.max_chunk_bytes:
             raise WebsocketProtocolError("Audio frame exceeds the configured chunk_duration_millis")
         try:
-            samples = np.frombuffer(audio_bytes, dtype="<i2").astype(np.float32)
+            if self.audio_encoding == PCM_F32_LE:
+                return np.frombuffer(audio_bytes, dtype=np.float32)
+            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
             return samples / 32768.0
         except ValueError as exc:
             raise WebsocketProtocolError(
-                "Audio frames must contain int16 little-endian PCM data"
+                "Audio frames must match the encoding declared in the start event"
             ) from exc
 
     async def enqueue_audio_message(self, message):
