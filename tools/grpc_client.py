@@ -56,6 +56,15 @@ class ClientOptions:
     sound_device_id: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class LiveInputSettings:
+    device_id: int
+    device_name: str
+    capture_sample_rate: int
+    source_sample_rate: int
+    channels: int
+
+
 class TranscriptRenderer:
     def __init__(self, *, all_updates: bool, live_preview: bool):
         self.all_updates = all_updates
@@ -157,7 +166,10 @@ class TranscriptionClient:
 
     @staticmethod
     def _normalize_samples(samples: npt.ArrayLike) -> AudioSamples:
-        return np.asarray(samples, dtype=np.float32).reshape(-1)
+        normalized = np.asarray(samples, dtype=np.float32)
+        if normalized.ndim == 2:
+            normalized = normalized.mean(axis=1)
+        return normalized.reshape(-1)
 
     def _build_audio_request(self, samples: npt.ArrayLike) -> Any:
         normalized_samples = self._normalize_samples(samples)
@@ -165,14 +177,16 @@ class TranscriptionClient:
             audio_chunk=PB2.AudioChunk(audio_bytes=normalized_samples.tobytes())
         )
 
-    def _input_device_id(self) -> Any:
-        if self.options.sound_device_id is not None:
-            return self.options.sound_device_id
-
+    @staticmethod
+    def _default_input_device_id() -> int | None:
         default_device = sd.default.device
-        if isinstance(default_device, tuple):
-            return default_device[0]
-        return default_device[0]
+        if hasattr(default_device, "__getitem__"):
+            default_input = default_device[0]
+        else:
+            default_input = default_device
+        if default_input is None or default_input < 0:
+            return None
+        return int(default_input)
 
     def _stream_simulated_audio(self) -> Any:
         assert self.options.simulate_filepath is not None
@@ -192,44 +206,96 @@ class TranscriptionClient:
             yield self._build_audio_request(chunk_samples)
             time.sleep(self.audio_config.effective_chunk_duration_seconds)
 
-    def _stream_live_audio(self) -> Any:
-        print("Capturing real-time audio from the microphone...")
+    def _candidate_device_ids(self) -> list[int]:
+        if self.options.sound_device_id is not None:
+            return [self.options.sound_device_id]
 
-        device_id = self._input_device_id()
-        device_info = sd.query_devices(device_id)
-        native_sample_rate = int(device_info["default_samplerate"])
-        print(
-            "Mic sample rate: "
-            f"{native_sample_rate} Hz, preferred capture sample rate: {self.audio_config.sample_rate} Hz"
-        )
+        candidates: list[int] = []
+        default_device_id = self._default_input_device_id()
+        if default_device_id is not None:
+            candidates.append(default_device_id)
 
-        try:
-            yield from self._stream_live_audio_with_rate(
-                device_id=device_id,
-                capture_sample_rate=self.audio_config.sample_rate,
-                source_sample_rate=self.audio_config.sample_rate,
-            )
-            return
-        except sd.PortAudioError as exc:
-            if native_sample_rate == self.audio_config.sample_rate:
-                raise
-            print(f"Falling back to native microphone sample rate {native_sample_rate} Hz: {exc}")
+        for device_id, device_info in enumerate(sd.query_devices()):
+            if int(device_info["max_input_channels"]) > 0 and device_id not in candidates:
+                candidates.append(device_id)
+        return candidates
 
-        yield from self._stream_live_audio_with_rate(
-            device_id=device_id,
-            capture_sample_rate=native_sample_rate,
-            source_sample_rate=native_sample_rate,
-        )
+    def _candidate_sample_rates(self, device_info: Any) -> list[int]:
+        candidates: list[int] = []
+
+        def add(rate: int) -> None:
+            if rate > 0 and rate not in candidates:
+                candidates.append(rate)
+
+        add(self.audio_config.sample_rate)
+        add(int(round(float(device_info["default_samplerate"]))))
+        add(48000)
+        add(44100)
+        add(32000)
+        add(16000)
+        return candidates
+
+    @staticmethod
+    def _candidate_channels(device_info: Any) -> list[int]:
+        max_input_channels = int(device_info["max_input_channels"])
+        candidates: list[int] = []
+        for channels in (1, 2):
+            if 0 < channels <= max_input_channels and channels not in candidates:
+                candidates.append(channels)
+        return candidates
+
+    def _resolve_live_input_settings(self) -> LiveInputSettings:
+        attempted: list[str] = []
+
+        for device_id in self._candidate_device_ids():
+            try:
+                device_info = sd.query_devices(device_id)
+            except sd.PortAudioError as exc:
+                attempted.append(f"{device_id}: {exc}")
+                continue
+            max_input_channels = int(device_info["max_input_channels"])
+            if max_input_channels <= 0:
+                continue
+
+            for channels in self._candidate_channels(device_info):
+                for sample_rate in self._candidate_sample_rates(device_info):
+                    try:
+                        sd.check_input_settings(
+                            device=device_id,
+                            channels=channels,
+                            dtype=self.audio_config.input_dtype,
+                            samplerate=sample_rate,
+                        )
+                    except sd.PortAudioError as exc:
+                        attempted.append(
+                            f"{device_id}@{sample_rate}Hz/{channels}ch ({device_info['name']}): {exc}"
+                        )
+                        continue
+
+                    return LiveInputSettings(
+                        device_id=int(device_id),
+                        device_name=str(device_info["name"]),
+                        capture_sample_rate=sample_rate,
+                        source_sample_rate=sample_rate,
+                        channels=channels,
+                    )
+
+        if self.options.sound_device_id is not None:
+            prefix = f"Could not open input device {self.options.sound_device_id}."
+        else:
+            prefix = "Could not find a working microphone input device."
+
+        details = "\n".join(attempted[:5])
+        if len(attempted) > 5:
+            details += f"\n... and {len(attempted) - 5} more failed combinations."
+        raise RuntimeError(f"{prefix}\n{details}" if details else prefix)
 
     def _stream_live_audio_with_rate(
         self,
         *,
-        device_id: Any,
-        capture_sample_rate: int,
-        source_sample_rate: int,
+        live_input: LiveInputSettings,
     ) -> Any:
-        callback_blocksize = max(1, int(capture_sample_rate * 0.05))
-        chunk_samples = max(1, self.audio_config.chunk_size(capture_sample_rate))
+        chunk_samples = max(1, self.audio_config.chunk_size(live_input.capture_sample_rate))
         audio_queue: Queue[AudioSamples] = Queue(maxsize=100)
 
         def audio_callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
@@ -250,64 +316,94 @@ class TranscriptionClient:
                 except Full:
                     pass
 
-        with sd.InputStream(
-            device=device_id,
-            channels=self.audio_config.channels,
-            samplerate=capture_sample_rate,
-            blocksize=callback_blocksize,
-            dtype=self.audio_config.input_dtype,
-            latency="low",
-            callback=audio_callback,
-        ):
-            yield self._build_config_request()
+        try:
+            with sd.InputStream(
+                device=live_input.device_id,
+                channels=live_input.channels,
+                samplerate=live_input.capture_sample_rate,
+                blocksize=0,
+                dtype=self.audio_config.input_dtype,
+                latency="low",
+                callback=audio_callback,
+            ):
+                yield self._build_config_request()
 
-            buffered_chunks: list[AudioSamples] = []
-            buffered_samples = 0
+                buffered_chunks: list[AudioSamples] = []
+                buffered_samples = 0
 
-            while True:
-                chunk = audio_queue.get()
-                buffered_chunks.append(chunk)
-                buffered_samples += len(chunk)
+                while True:
+                    chunk = audio_queue.get()
+                    buffered_chunks.append(chunk)
+                    buffered_samples += len(chunk)
 
-                if buffered_samples < chunk_samples:
-                    continue
+                    if buffered_samples < chunk_samples:
+                        continue
 
-                chunk_native = self._normalize_samples(np.concatenate(buffered_chunks))
-                if len(chunk_native) > chunk_samples:
-                    chunk_to_send = chunk_native[:chunk_samples]
-                    remainder = chunk_native[chunk_samples:]
-                    buffered_chunks = [remainder] if len(remainder) else []
-                    buffered_samples = len(remainder)
-                else:
-                    chunk_to_send = chunk_native
-                    buffered_chunks = []
-                    buffered_samples = 0
+                    chunk_native = self._normalize_samples(np.concatenate(buffered_chunks))
+                    if len(chunk_native) > chunk_samples:
+                        chunk_to_send = chunk_native[:chunk_samples]
+                        remainder = chunk_native[chunk_samples:]
+                        buffered_chunks = [remainder] if len(remainder) else []
+                        buffered_samples = len(remainder)
+                    else:
+                        chunk_to_send = chunk_native
+                        buffered_chunks = []
+                        buffered_samples = 0
 
-                if source_sample_rate != self.audio_config.sample_rate:
-                    chunk_to_send = self._normalize_samples(
-                        librosa.resample(
-                            chunk_to_send,
-                            orig_sr=source_sample_rate,
-                            target_sr=self.audio_config.sample_rate,
+                    if live_input.source_sample_rate != self.audio_config.sample_rate:
+                        chunk_to_send = self._normalize_samples(
+                            librosa.resample(
+                                chunk_to_send,
+                                orig_sr=live_input.source_sample_rate,
+                                target_sr=self.audio_config.sample_rate,
+                            )
                         )
-                    )
 
-                yield self._build_audio_request(chunk_to_send)
+                    yield self._build_audio_request(chunk_to_send)
+        except sd.PortAudioError as exc:
+            raise RuntimeError(
+                f"Could not start microphone input on device {live_input.device_id} "
+                f"({live_input.device_name}): {exc}"
+            ) from exc
 
-    def stream_requests(self) -> Any:
+    def stream_requests(self, live_input: LiveInputSettings | None = None) -> Any:
         print("Started connection")
         if self.options.simulate_filepath:
             return self._stream_simulated_audio()
-        return self._stream_live_audio()
+        if live_input is None:
+            raise RuntimeError("Live input settings must be resolved before starting live capture.")
+
+        print("Capturing real-time audio from the microphone...")
+        print(
+            f"Using input device {live_input.device_id}: {live_input.device_name} "
+            f"({live_input.channels} channel(s), {live_input.capture_sample_rate} Hz)"
+        )
+        if live_input.capture_sample_rate != self.audio_config.sample_rate:
+            print(
+                f"Resampling microphone audio from {live_input.capture_sample_rate} Hz "
+                f"to {self.audio_config.sample_rate} Hz"
+            )
+
+        return self._stream_live_audio_with_rate(live_input=live_input)
 
     def run(self) -> None:
+        live_input = None
+        if self.options.simulate_filepath is None:
+            try:
+                live_input = self._resolve_live_input_settings()
+            except RuntimeError as exc:
+                print(f"Audio input error: {exc}", file=sys.stderr)
+                return
+
         channel = grpc.insecure_channel(f"{self.options.host}:{self.options.port}")
         stub = PB2_GRPC.SpeechToTextStub(channel)
-        requests = self.stream_requests()
+        requests = self.stream_requests(live_input=live_input)
         responses = stub.StreamingRecognize(requests)
 
         try:
             self.renderer.render(responses)
+        except RuntimeError as exc:
+            print(f"Audio input error: {exc}", file=sys.stderr)
         except grpc.RpcError as exc:
             print("gRPC Error:", exc)
         finally:
