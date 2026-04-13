@@ -304,7 +304,7 @@ async def serve(args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Argument parser for the whisper-realtme-server",
+        description="Argument parser for the whisper-realtime-server",
         allow_abbrev=False,
     )
     parser.add_argument(

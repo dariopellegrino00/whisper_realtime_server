@@ -1,10 +1,9 @@
-from functools import lru_cache
-
 import librosa
 import numpy as np
 
 
-@lru_cache(10**6)
+# Cache removed here:
+# warmup loads are one-shot.
 def load_audio(fname):
     audio, _ = librosa.load(fname, sr=16000, dtype=np.float32)
     return audio
