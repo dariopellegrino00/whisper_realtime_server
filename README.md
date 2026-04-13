@@ -1,8 +1,8 @@
-# Whisper\_Realtime\_Server
+# swim / Whisper\_Realtime\_Server
 
 
 > [!WARNING]
-> Most of the information in this README is still work in progress; `whisper_realtime_server` is under development.
+> Most of the information in this README is still work in progress; `swim` is experimental and under development.
 
 ## Installation
 
@@ -39,8 +39,8 @@ git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
 - When built, you will be able to test the server with your microphone or with a simulation of
   real-time audio streaming using audio files.
 - There are already two audio examples in the `resources` folder. If you want to add new ones,
-  do so **before** the next steps by placing the audio files in
-  `whisper_realtime_server/resources`.
+  do so **before** the next steps by placing the audio files in the repository `resources/`
+  folder.
 
 #### Steps to Build and Run the Docker Image
 
@@ -53,13 +53,13 @@ git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
 2. Build the Docker image:
 
    ```bash
-   docker build -t whisper_realtime_server .
+   docker build -t swim .
    ```
 
 3. Run the Docker container with GPU support and port mapping:
 
    ```bash
-   docker run --gpus all -p 50051:50051 --name whisper_server whisper_realtime_server
+   docker run --gpus all -p 50051:50051 --name swim-server swim
    ```
    - You can change the port mapping `50051:50051` if needed; this is the default server port.
      You can also customize the Docker startup command parameters. Check the available arguments
@@ -71,13 +71,13 @@ git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
 4. To stop the Docker container:
 
    ```bash
-   docker stop whisper_server
+   docker stop swim-server
    ```
 
 5. To restart the Docker container:
 
    ```bash
-   docker start whisper_server
+   docker start swim-server
    ```
 </details>
 <details>
@@ -132,16 +132,16 @@ If you followed the `Building with Docker` section and you want to run the clien
    docker ps 
    ```
 
-   If you see `whisper_server` listed, you are good to go; otherwise start the container:
+   If you see `swim-server` listed, you are good to go; otherwise start the container:
 
    ```bash
-   docker start whisper_server
+   docker start swim-server
    ```
 
 2. Open a terminal in the container
    
    ```bash
-   docker exec -it whisper_server /bin/bash 
+   docker exec -it swim-server /bin/bash 
    ```
 
    Now you should see something like:
@@ -268,9 +268,6 @@ If you followed the `Building with Docker` section and you want to run the clien
    The server supports both `plain` and `batched` shared ASR backends through `--backend`. Shared VAD preprocessing is enabled by default and can be disabled with `--no-vad`. During testing, some issues emerged with the `batched` backend in specific scenarios, especially in repetition-heavy or timestamp-sensitive flows. For this reason, `plain` is the current default backend, while `batched` remains available for performance evaluation and further investigation.
 
 ## Documentation
-
-> [!IMPORTANT]
-> TODO: Add more documentation
 
 Before setting up your own client, it's important to understand the server architecture. The
 client first connects to a gRPC server on the default port (`50051`). After connecting, the
