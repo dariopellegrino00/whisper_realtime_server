@@ -2,10 +2,13 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from swim.transports.audio_encoding import (
+    PCM_F32_LE,
+    PCM_S16_LE,
+    SUPPORTED_AUDIO_ENCODINGS,
+)
+
 WEBSOCKET_TRANSCRIBE_PATH = "/v1/transcribe"
-PCM_F32_LE = "pcm_f32le"
-PCM_S16_LE = "pcm_s16le"
-SUPPORTED_AUDIO_ENCODINGS = {PCM_F32_LE, PCM_S16_LE}
 SAMPLE_RATE_HZ = 16000
 CHANNELS = 1
 
@@ -96,3 +99,22 @@ def build_completed_event() -> str:
 
 def build_error_event(code: str, message: str) -> str:
     return encode_json({"type": "error", "code": code, "message": message})
+
+
+__all__ = [
+    "CHANNELS",
+    "PCM_F32_LE",
+    "PCM_S16_LE",
+    "SAMPLE_RATE_HZ",
+    "SUPPORTED_AUDIO_ENCODINGS",
+    "StartMessage",
+    "WEBSOCKET_TRANSCRIBE_PATH",
+    "WebsocketProtocolError",
+    "build_completed_event",
+    "build_error_event",
+    "build_transcript_event",
+    "encode_json",
+    "parse_finish_message",
+    "parse_json_message",
+    "parse_start_message",
+]

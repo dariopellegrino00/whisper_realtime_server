@@ -12,6 +12,10 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Response
 
 from swim.runtime import ParallelOnlineASRProcessor, ParallelRealtimeASR, resolve_asr_backend
+from swim.transports.audio_encoding import (
+    SUPPORTED_AUDIO_ENCODINGS,
+    bytes_per_sample_for_encoding,
+)
 from swim.transports.grpc.stream_utils import (
     ProcessorManager,
     setup_application_logging,
@@ -27,7 +31,9 @@ from swim.transports.websocket.messages import (
 from swim.transports.websocket.session import WebsocketStreamSession
 
 DEFAULT_WEBSOCKET_MAX_SIZE_BYTES = 2**20
-BYTES_PER_SAMPLE = 2
+MAX_BYTES_PER_SAMPLE = max(
+    bytes_per_sample_for_encoding(encoding) for encoding in SUPPORTED_AUDIO_ENCODINGS
+)
 
 
 def websocket_start_timeout_seconds(max_chunk_duration_seconds: float) -> float:
@@ -37,7 +43,9 @@ def websocket_start_timeout_seconds(max_chunk_duration_seconds: float) -> float:
 def websocket_max_message_size_bytes(max_chunk_duration_seconds: float) -> int:
     expected_audio_bytes = int(
         round(
-            ParallelOnlineASRProcessor.SAMPLING_RATE * max_chunk_duration_seconds * BYTES_PER_SAMPLE
+            ParallelOnlineASRProcessor.SAMPLING_RATE
+            * max_chunk_duration_seconds
+            * MAX_BYTES_PER_SAMPLE
         )
     )
     return max(expected_audio_bytes, DEFAULT_WEBSOCKET_MAX_SIZE_BYTES)

@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import grpc
-import numpy as np
-import numpy.typing as npt
 
+from swim.transports.audio_encoding import (
+    PCM_F32_LE,
+    PCM_S16_LE,
+    SUPPORTED_AUDIO_ENCODINGS,
+    encode_audio_samples,
+)
 from swim.transports.grpc.generated import speech_pb2, speech_pb2_grpc
 from tools._audio_client_common import (
     AudioConfig,
@@ -29,8 +33,6 @@ PB2: Any = speech_pb2
 PB2_GRPC: Any = speech_pb2_grpc
 LIVE_PREVIEW_INTERIM_COLOR = "38;5;215"
 ALL_UPDATES_SEPARATOR = "--------------------"
-PCM_F32_LE = "pcm_f32le"
-PCM_S16_LE = "pcm_s16le"
 PROTO_AUDIO_ENCODINGS = {
     PCM_F32_LE: getattr(PB2, "AUDIO_ENCODING_PCM_F32LE", 1),
     PCM_S16_LE: getattr(PB2, "AUDIO_ENCODING_PCM_S16LE", 2),
@@ -148,14 +150,8 @@ class TranscriptionClient:
             )
         )
 
-    def _build_audio_request(self, samples: npt.ArrayLike) -> Any:
-        normalized_samples = normalize_samples(samples)
-        if self.options.audio_encoding == PCM_S16_LE:
-            audio_bytes = bytes(
-                np.rint(np.clip(normalized_samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
-            )
-        else:
-            audio_bytes = normalized_samples.tobytes()
+    def _build_audio_request(self, samples) -> Any:
+        audio_bytes = encode_audio_samples(normalize_samples(samples), self.options.audio_encoding)
         return PB2.StreamingRecognizeRequest(audio_chunk=PB2.AudioChunk(audio_bytes=audio_bytes))
 
     def _stream_simulated_audio(self) -> Any:
@@ -228,7 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--audio-encoding",
         type=str,
-        choices=(PCM_F32_LE, PCM_S16_LE),
+        choices=SUPPORTED_AUDIO_ENCODINGS,
         default=PCM_S16_LE,
         help="Wire encoding for outbound gRPC audio chunks",
     )

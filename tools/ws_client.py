@@ -8,15 +8,15 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from swim.transports.websocket.messages import (
-    PCM_F32_LE,
+from swim.transports.audio_encoding import (
     PCM_S16_LE,
-    WEBSOCKET_TRANSCRIBE_PATH,
+    SUPPORTED_AUDIO_ENCODINGS,
+    encode_audio_samples,
 )
+from swim.transports.websocket.messages import WEBSOCKET_TRANSCRIBE_PATH
 from tools._audio_client_common import (
     AudioConfig,
     LiveAudioChunkProducer,
@@ -155,10 +155,7 @@ class WebsocketTranscriptionClient:
         )
 
     def _encode_audio_chunk(self, samples) -> bytes:
-        clipped = np.clip(samples, -1.0, 1.0)
-        if self.options.audio_encoding == PCM_F32_LE:
-            return bytes(clipped.astype(np.float32).tobytes())
-        return bytes(np.rint(clipped * 32767.0).astype(np.int16).tobytes())
+        return encode_audio_samples(samples, self.options.audio_encoding)
 
     async def _send_simulated_audio(self, websocket, normalized_audio) -> None:
         await websocket.send(self._start_message(), text=True)
@@ -273,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--audio-encoding",
         type=str,
-        choices=(PCM_F32_LE, PCM_S16_LE),
+        choices=SUPPORTED_AUDIO_ENCODINGS,
         default=PCM_S16_LE,
         help="Wire encoding for outbound websocket audio chunks",
     )

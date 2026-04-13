@@ -37,6 +37,7 @@ sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
 sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
 
+from swim.transports.audio_encoding import PCM_S16_LE  # noqa: E402
 from swim.transports.grpc.session import SpeechStreamSession  # noqa: E402
 from tests.conftest import AsyncIterator  # noqa: E402
 
@@ -141,7 +142,7 @@ def test_manage_first_message_accepts_pcm_s16le_and_updates_max_chunk_bytes():
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500, encoding=2), FakeContext())
         assert session.chunk_duration_millis == 500
-        assert session.audio_encoding == 2
+        assert session.audio_encoding == PCM_S16_LE
         assert session.max_chunk_bytes == 16000
 
     asyncio.run(scenario())
@@ -176,7 +177,7 @@ def test_consume_initial_audio_request_decodes_pcm_s16le():
     async def scenario():
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500, encoding=2), FakeContext())
-        samples = np.array([16384, -8192], dtype="<i2")
+        samples = np.array([16384, -8192], dtype=np.int16)
         await session.consume_initial_audio_request(
             FakeRequest(audio_bytes=samples.tobytes()), FakeContext()
         )

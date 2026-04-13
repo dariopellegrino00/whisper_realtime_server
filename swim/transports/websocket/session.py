@@ -1,23 +1,20 @@
 import logging
 
-import numpy as np
 from websockets.exceptions import ConnectionClosed
 
 from swim.runtime import ParallelOnlineASRProcessor
+from swim.transports.audio_encoding import (
+    PCM_F32_LE,
+    bytes_per_sample_for_encoding,
+    decode_audio_bytes,
+)
 from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
 from swim.transports.websocket.messages import (
-    PCM_F32_LE,
-    PCM_S16_LE,
     WebsocketProtocolError,
     build_transcript_event,
     parse_finish_message,
     parse_start_message,
 )
-
-BYTES_PER_SAMPLE = {
-    PCM_F32_LE: 4,
-    PCM_S16_LE: 2,
-}
 
 
 class WebsocketStreamSession:
@@ -52,7 +49,7 @@ class WebsocketStreamSession:
         self.max_chunk_bytes = int(
             ParallelOnlineASRProcessor.SAMPLING_RATE
             * (self.chunk_duration_millis / 1000.0)
-            * BYTES_PER_SAMPLE[self.audio_encoding]
+            * bytes_per_sample_for_encoding(self.audio_encoding)
         )
         self.processor_manager.processor.chunk_duration_seconds = (
             self.chunk_duration_millis / 1000.0
@@ -73,10 +70,7 @@ class WebsocketStreamSession:
         if self.max_chunk_bytes is not None and len(audio_bytes) > self.max_chunk_bytes:
             raise WebsocketProtocolError("Audio frame exceeds the configured chunk_duration_millis")
         try:
-            if self.audio_encoding == PCM_F32_LE:
-                return np.frombuffer(audio_bytes, dtype=np.float32)
-            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-            return samples / 32768.0
+            return decode_audio_bytes(audio_bytes, self.audio_encoding)
         except ValueError as exc:
             raise WebsocketProtocolError(
                 "Audio frames must match the encoding declared in the start event"

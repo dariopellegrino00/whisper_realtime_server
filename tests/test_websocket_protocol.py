@@ -435,8 +435,8 @@ def test_websocket_start_timeout_uses_chunk_duration_limit():
 
 def test_websocket_max_message_size_grows_with_max_chunk_duration():
     assert websocket_max_message_size_bytes(1.0) == 2**20
-    assert websocket_max_message_size_bytes(20.0) == 2**20
-    assert websocket_max_message_size_bytes(40.0) == 1280000
+    assert websocket_max_message_size_bytes(10.0) == 2**20
+    assert websocket_max_message_size_bytes(20.0) == 1280000
 
 
 def test_handle_connection_turns_request_task_protocol_error_into_clean_close():

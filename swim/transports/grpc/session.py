@@ -3,25 +3,24 @@ import logging
 from abc import ABC, abstractmethod
 
 import grpc
-import numpy as np
 from grpc import StatusCode
 
 from swim.runtime import ParallelOnlineASRProcessor
+from swim.transports.audio_encoding import (
+    PCM_F32_LE,
+    PCM_S16_LE,
+    bytes_per_sample_for_encoding,
+    decode_audio_bytes,
+)
 from swim.transports.grpc.generated import speech_pb2 as whisp_speech
 from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
 
-AUDIO_ENCODING_UNSPECIFIED = 0
-AUDIO_ENCODING_PCM_F32LE = 1
-AUDIO_ENCODING_PCM_S16LE = 2
-ENCODING_INFO = {
-    AUDIO_ENCODING_PCM_F32LE: {
-        "bytes_per_sample": 4,
-        "name": "pcm_f32le",
-    },
-    AUDIO_ENCODING_PCM_S16LE: {
-        "bytes_per_sample": 2,
-        "name": "pcm_s16le",
-    },
+AUDIO_ENCODING_UNSPECIFIED = getattr(whisp_speech, "AUDIO_ENCODING_UNSPECIFIED", 0)
+AUDIO_ENCODING_PCM_F32LE = getattr(whisp_speech, "AUDIO_ENCODING_PCM_F32LE", 1)
+AUDIO_ENCODING_PCM_S16LE = getattr(whisp_speech, "AUDIO_ENCODING_PCM_S16LE", 2)
+PROTO_AUDIO_ENCODINGS = {
+    AUDIO_ENCODING_PCM_F32LE: PCM_F32_LE,
+    AUDIO_ENCODING_PCM_S16LE: PCM_S16_LE,
 }
 
 
@@ -63,21 +62,16 @@ class SpeechStreamSession(StreamSession):
             "confirmed": TranscriptionManager(),
             "interim": TranscriptionManager(),
         }
-        self.audio_encoding = AUDIO_ENCODING_PCM_F32LE
+        self.audio_encoding = PCM_F32_LE
 
     @staticmethod
     def _normalize_audio_encoding(encoding):
         if encoding == AUDIO_ENCODING_UNSPECIFIED:
-            return AUDIO_ENCODING_PCM_F32LE
-        return encoding
-
-    @staticmethod
-    def _decode_audio_bytes(audio_bytes, encoding):
-        if encoding == AUDIO_ENCODING_PCM_F32LE:
-            return np.frombuffer(audio_bytes, dtype=np.float32)
-        if encoding == AUDIO_ENCODING_PCM_S16LE:
-            return np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        raise ValueError(f"Unsupported audio encoding {encoding!r}")
+            return PCM_F32_LE
+        try:
+            return PROTO_AUDIO_ENCODINGS[encoding]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported audio encoding {encoding!r}") from exc
 
     async def _parse_audio_request(self, request, context):
         if request.WhichOneof("payload") != "audio_chunk":
@@ -92,7 +86,7 @@ class SpeechStreamSession(StreamSession):
                 "Audio chunk exceeds the configured chunk_duration_ms",
             )
         try:
-            return self._decode_audio_bytes(audio_bytes, self.audio_encoding)
+            return decode_audio_bytes(audio_bytes, self.audio_encoding)
         except ValueError:
             await context.abort(
                 StatusCode.INVALID_ARGUMENT,
@@ -138,10 +132,11 @@ class SpeechStreamSession(StreamSession):
                 f"chunk_duration_millis must be > 0 and <= {self.max_chunk_duration_millis}",
             )
 
-        requested_encoding = self._normalize_audio_encoding(
-            getattr(first_request.config, "encoding", AUDIO_ENCODING_UNSPECIFIED)
-        )
-        if requested_encoding not in ENCODING_INFO:
+        try:
+            requested_encoding = self._normalize_audio_encoding(
+                getattr(first_request.config, "encoding", AUDIO_ENCODING_UNSPECIFIED)
+            )
+        except ValueError:
             await context.abort(
                 StatusCode.INVALID_ARGUMENT,
                 "encoding must be one of: AUDIO_ENCODING_PCM_F32LE, AUDIO_ENCODING_PCM_S16LE",
@@ -152,13 +147,13 @@ class SpeechStreamSession(StreamSession):
         self.max_chunk_bytes = int(
             ParallelOnlineASRProcessor.SAMPLING_RATE
             * (chunk_duration_millis / 1000.0)
-            * ENCODING_INFO[self.audio_encoding]["bytes_per_sample"]
+            * bytes_per_sample_for_encoding(self.audio_encoding)
         )
         self.processor_manager.processor.chunk_duration_seconds = chunk_duration_millis / 1000.0
         self.logger.debug(
             "Accepted stream config: chunk_duration_millis=%s encoding=%s max_chunk_bytes=%s",
             self.chunk_duration_millis,
-            ENCODING_INFO[self.audio_encoding]["name"],
+            self.audio_encoding,
             self.max_chunk_bytes,
         )
 
