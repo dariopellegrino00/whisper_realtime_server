@@ -22,9 +22,11 @@ def bytes_per_sample_for_encoding(encoding: str) -> int:
 
 def decode_audio_bytes(audio_bytes: bytes, encoding: str) -> npt.NDArray[np.float32]:
     if encoding == PCM_F32_LE:
-        return np.frombuffer(audio_bytes, dtype=np.float32)
+        # Use little-endian float32 explicitly ('<f4')
+        return np.frombuffer(audio_bytes, dtype="<f4")
     if encoding == PCM_S16_LE:
-        samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+        # Use little-endian int16 explicitly ('<i2')
+        samples = np.frombuffer(audio_bytes, dtype="<i2").astype(np.float32)
         return samples / 32768.0
     raise ValueError(f"Unsupported audio encoding {encoding!r}")
 
@@ -32,9 +34,9 @@ def decode_audio_bytes(audio_bytes: bytes, encoding: str) -> npt.NDArray[np.floa
 def encode_audio_samples(samples: npt.ArrayLike, encoding: str) -> bytes:
     clipped = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
     if encoding == PCM_F32_LE:
-        return bytes(clipped.tobytes())
+        return bytes(clipped.astype("<f4").tobytes())
     if encoding == PCM_S16_LE:
-        return bytes(np.rint(clipped * 32767.0).astype(np.int16).tobytes())
+        return bytes(np.rint(clipped * 32767.0).astype("<i2").tobytes())
     raise ValueError(f"Unsupported audio encoding {encoding!r}")
 
 

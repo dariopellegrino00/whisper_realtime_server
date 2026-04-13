@@ -158,19 +158,22 @@ class WebsocketTranscriptionClient:
         return encode_audio_samples(samples, self.options.audio_encoding)
 
     async def _send_simulated_audio(self, websocket, normalized_audio) -> None:
-        await websocket.send(self._start_message(), text=True)
+        await websocket.send(self._start_message())
         for start in range(0, len(normalized_audio), self.audio_config.chunk_size()):
             chunk_samples = normalized_audio[start : start + self.audio_config.chunk_size()]
             await websocket.send(self._encode_audio_chunk(chunk_samples))
             await asyncio.sleep(self.audio_config.effective_chunk_duration_seconds)
-        await websocket.send(json.dumps({"type": "finish"}), text=True)
+        await websocket.send(json.dumps({"type": "finish"}))
 
     async def _send_live_audio(self, websocket, *, live_input: LiveInputSettings) -> None:
-        with LiveAudioChunkProducer(self.audio_config, live_input) as producer:
-            await websocket.send(self._start_message(), text=True)
-            while True:
-                chunk = await asyncio.to_thread(producer.read_chunk)
-                await websocket.send(self._encode_audio_chunk(chunk))
+        try:
+            with LiveAudioChunkProducer(self.audio_config, live_input) as producer:
+                await websocket.send(self._start_message())
+                while True:
+                    chunk = await asyncio.to_thread(producer.read_chunk)
+                    await websocket.send(self._encode_audio_chunk(chunk))
+        except EOFError:
+            pass
 
     async def _send_audio_stream(
         self,
@@ -249,10 +252,10 @@ class WebsocketTranscriptionClient:
                         sender_task.cancel()
                     try:
                         await sender_task
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, EOFError):
                         pass
         except RuntimeError as exc:
-            print(f"Audio input error: {exc}", file=sys.stderr)
+            print(f"Error: {exc}", file=sys.stderr)
         except ConnectionClosed as exc:
             print(f"Websocket closed: code={exc.code} reason={exc.reason}", file=sys.stderr)
 

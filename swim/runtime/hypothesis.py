@@ -6,7 +6,7 @@ from rapidfuzz import fuzz, utils
 logger = logging.getLogger(__name__)
 
 MAX_DEDUP_NGRAM_SIZE = 10
-DEDUP_MAX_FORWARD_GAP_SECONDS = 0.2
+DEDUP_MAX_FORWARD_GAP_SECONDS = 0.25
 
 
 class HypothesisBuffer:

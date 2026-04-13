@@ -287,6 +287,7 @@ The client-specific options are:
 --host HOST          Websocket server address
 --port PORT          Websocket server port
 --path PATH          Websocket endpoint path
+--audio-encoding     Wire encoding for outbound websocket audio chunks (`pcm_s16le` or `pcm_f32le`)
 --all-updates        Print each response packet in a grouped block, including interim updates
 --simulate SIMULATE  Simulation mode: path to the audio file used to simulate realtime streaming
 --live-preview       Display confirmed and interim text in a live preview view

@@ -129,4 +129,4 @@ class WebsocketStreamSession:
         return [build_transcript_event(confirmed_fmt)] if has_confirmed else []
 
 
-__all__ = ["ProcessorManager", "TranscriptionManager", "WebsocketStreamSession"]
+__all__ = ["WebsocketStreamSession"]

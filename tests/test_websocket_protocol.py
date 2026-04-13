@@ -74,8 +74,8 @@ class FakeWebsocket:
             raise message
         return message
 
-    async def send(self, message, text=None):
-        self.sent_messages.append((message, text))
+    async def send(self, message):
+        self.sent_messages.append(message)
 
     async def close(self, code=1000, reason=""):
         self.closed = (code, reason)
@@ -447,7 +447,7 @@ def test_handle_connection_turns_request_task_protocol_error_into_clean_close():
         await server.handle_connection(websocket)
 
         assert len(websocket.sent_messages) == 1
-        payload = json.loads(websocket.sent_messages[0][0])
+        payload = json.loads(websocket.sent_messages[0])
         assert payload == {
             "type": "error",
             "code": "invalid_argument",
@@ -466,7 +466,7 @@ def test_handle_connection_turns_request_task_runtime_error_into_internal_error(
         await server.handle_connection(websocket)
 
         assert len(websocket.sent_messages) == 1
-        payload = json.loads(websocket.sent_messages[0][0])
+        payload = json.loads(websocket.sent_messages[0])
         assert payload == {
             "type": "error",
             "code": "internal_error",
@@ -495,7 +495,7 @@ def test_handle_connection_times_out_before_allocating_stream_session(monkeypatc
 
         assert server.create_stream_session_calls == 0
         assert len(websocket.sent_messages) == 1
-        payload = json.loads(websocket.sent_messages[0][0])
+        payload = json.loads(websocket.sent_messages[0])
         assert payload["type"] == "error"
         assert payload["code"] == "deadline_exceeded"
         assert "initial start event" in payload["message"]
@@ -510,7 +510,7 @@ def test_handle_connection_allows_finish_before_first_audio():
 
         await server.handle_connection(websocket)
 
-        assert websocket.sent_messages == [(build_completed_event(), True)]
+        assert websocket.sent_messages == [build_completed_event()]
         assert websocket.closed == (1000, "completed")
 
     asyncio.run(scenario())

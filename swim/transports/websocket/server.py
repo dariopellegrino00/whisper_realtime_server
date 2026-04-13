@@ -100,7 +100,7 @@ class WebsocketTranscriptionServer:
 
     async def _send_error_and_close(self, websocket, exc: WebsocketProtocolError):
         try:
-            await websocket.send(build_error_event(exc.code, exc.message), text=True)
+            await websocket.send(build_error_event(exc.code, exc.message))
         except ConnectionClosed:
             return
         await websocket.close(code=exc.close_code, reason=exc.message)
@@ -147,7 +147,7 @@ class WebsocketTranscriptionServer:
                     "Client closed request stream for %s before sending audio",
                     stream_id,
                 )
-                await websocket.send(build_completed_event(), text=True)
+                await websocket.send(build_completed_event())
                 await websocket.close(code=1000, reason="completed")
                 return
 
@@ -188,13 +188,13 @@ class WebsocketTranscriptionServer:
                         break
 
                     for response in stream_session.create_response():
-                        await websocket.send(response, text=True)
+                        await websocket.send(response)
 
             if not stream_session.processor_manager.is_finished():
                 for response in stream_session.final_response():
-                    await websocket.send(response, text=True)
+                    await websocket.send(response)
 
-            await websocket.send(build_completed_event(), text=True)
+            await websocket.send(build_completed_event())
             await websocket.close(code=1000, reason="completed")
         except ConnectionClosed:
             stream_logger.info("Websocket closed for %s", stream_id)
@@ -223,7 +223,9 @@ class WebsocketTranscriptionServer:
                 except (asyncio.CancelledError, ConnectionClosed, WebsocketProtocolError):
                     pass
                 except Exception:
-                    pass
+                    stream_logger.exception(
+                        "Unexpected error in request enqueuer cleanup for %s", stream_id
+                    )
 
 
 def _build_not_found_response():
@@ -428,7 +430,7 @@ def build_parser():
         choices="tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo".split(
             ","
         ),
-        help="Name size of the Whisper model to use (default: large-v2). The model is automatically downloaded from the model hub if not present in model cache dir",
+        help="Name size of the Whisper model to use (default: large-v3-turbo). The model is automatically downloaded from the model hub if not present in model cache dir",
     )
     parser.add_argument(
         "--model-cache-dir",

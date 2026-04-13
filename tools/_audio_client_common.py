@@ -132,8 +132,10 @@ class LiveAudioChunkProducer:
         self.buffered_chunks: list[AudioSamples] = []
         self.buffered_samples = 0
         self._stream: sd.InputStream | None = None
+        self._running = False
 
     def __enter__(self) -> LiveAudioChunkProducer:
+        self._running = True
         try:
             self._stream = sd.InputStream(
                 device=self.live_input.device_id,
@@ -146,6 +148,7 @@ class LiveAudioChunkProducer:
             )
             self._stream.__enter__()
         except sd.PortAudioError as exc:
+            self._running = False
             raise RuntimeError(
                 f"Could not start microphone input on device {self.live_input.device_id} "
                 f"({self.live_input.device_name}): {exc}"
@@ -153,12 +156,16 @@ class LiveAudioChunkProducer:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self._running = False
         if self._stream is not None:
             self._stream.__exit__(exc_type, exc, tb)
             self._stream = None
 
     def _audio_callback(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
         del frames, time_info
+        if not self._running:
+            return
+
         if status:
             print(f"Audio callback status: {status}", file=sys.stderr)
 
@@ -176,21 +183,28 @@ class LiveAudioChunkProducer:
                 pass
 
     def read_chunk(self) -> AudioSamples:
-        while True:
+        while self._running:
             try:
                 chunk = self.audio_queue.get(timeout=0.1)
                 return self._buffer_chunk(chunk)
             except Empty:
                 continue
+        raise EOFError("Producer is stopped")
 
     def _buffer_chunk(self, chunk: AudioSamples) -> AudioSamples:
         self.buffered_chunks.append(chunk)
         self.buffered_samples += len(chunk)
 
-        while self.buffered_samples < self.chunk_samples:
-            next_chunk = self.audio_queue.get()
-            self.buffered_chunks.append(next_chunk)
-            self.buffered_samples += len(next_chunk)
+        while self._running and self.buffered_samples < self.chunk_samples:
+            try:
+                next_chunk = self.audio_queue.get(timeout=0.1)
+                self.buffered_chunks.append(next_chunk)
+                self.buffered_samples += len(next_chunk)
+            except Empty:
+                continue
+
+        if not self._running:
+            raise EOFError("Producer is stopped during buffering")
 
         chunk_native = normalize_samples(np.concatenate(self.buffered_chunks))
         if len(chunk_native) > self.chunk_samples:
