@@ -12,7 +12,7 @@ from swim.transports.websocket.messages import (
     parse_start_message,
 )
 
-BYTES_PER_SAMPLE = 4
+BYTES_PER_SAMPLE = 2
 
 
 class WebsocketStreamSession:
@@ -65,10 +65,11 @@ class WebsocketStreamSession:
         if self.max_chunk_bytes is not None and len(audio_bytes) > self.max_chunk_bytes:
             raise WebsocketProtocolError("Audio frame exceeds the configured chunk_duration_millis")
         try:
-            return np.frombuffer(audio_bytes, dtype="<f4")
+            samples = np.frombuffer(audio_bytes, dtype="<i2").astype(np.float32)
+            return samples / 32768.0
         except ValueError as exc:
             raise WebsocketProtocolError(
-                "Audio frames must contain float32 little-endian PCM data"
+                "Audio frames must contain int16 little-endian PCM data"
             ) from exc
 
     async def enqueue_audio_message(self, message):

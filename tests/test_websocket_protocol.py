@@ -142,7 +142,7 @@ def test_parse_start_message_accepts_expected_payload():
             "type": "start",
             "chunk_duration_millis": 500,
             "audio_format": {
-                "encoding": "pcm_f32le",
+                "encoding": "pcm_s16le",
                 "sample_rate_hz": 16000,
                 "channels": 1,
             },
@@ -160,7 +160,7 @@ def test_parse_start_message_rejects_wrong_audio_format():
             "type": "start",
             "chunk_duration_millis": 500,
             "audio_format": {
-                "encoding": "pcm_s16le",
+                "encoding": "pcm_f32le",
                 "sample_rate_hz": 16000,
                 "channels": 1,
             },
@@ -170,7 +170,7 @@ def test_parse_start_message_rejects_wrong_audio_format():
     with pytest.raises(WebsocketProtocolError) as excinfo:
         parse_start_message(message, max_chunk_duration_millis=1000)
 
-    assert "pcm_f32le" in excinfo.value.message
+    assert "pcm_s16le" in excinfo.value.message
 
 
 def test_parse_finish_message_rejects_non_finish_event():
@@ -189,7 +189,7 @@ def test_manage_start_message_sets_chunk_duration_and_max_chunk_bytes():
                     "type": "start",
                     "chunk_duration_millis": 500,
                     "audio_format": {
-                        "encoding": "pcm_f32le",
+                        "encoding": "pcm_s16le",
                         "sample_rate_hz": 16000,
                         "channels": 1,
                     },
@@ -198,7 +198,7 @@ def test_manage_start_message_sets_chunk_duration_and_max_chunk_bytes():
         )
         assert session.chunk_duration_millis == 500
         assert session.processor_manager.processor.chunk_duration_seconds == 0.5
-        assert session.max_chunk_bytes == 32000
+        assert session.max_chunk_bytes == 16000
 
     asyncio.run(scenario())
 
@@ -212,22 +212,25 @@ def test_consume_initial_audio_message_stores_audio_samples():
                     "type": "start",
                     "chunk_duration_millis": 500,
                     "audio_format": {
-                        "encoding": "pcm_f32le",
+                        "encoding": "pcm_s16le",
                         "sample_rate_hz": 16000,
                         "channels": 1,
                     },
                 }
             )
         )
-        samples = np.array([0.1, 0.2], dtype=np.float32)
-        await session.consume_initial_audio_message(samples.tobytes())
+        raw_samples = np.array([16384, -8192], dtype="<i2")
+        await session.consume_initial_audio_message(raw_samples.tobytes())
         assert len(session.processor_manager.inserted_batches) == 1
-        assert np.array_equal(session.processor_manager.inserted_batches[0], samples)
+        assert np.allclose(
+            session.processor_manager.inserted_batches[0],
+            np.array([0.5, -0.25], dtype=np.float32),
+        )
 
     asyncio.run(scenario())
 
 
-def test_parse_audio_message_uses_little_endian_float32():
+def test_parse_audio_message_uses_little_endian_int16():
     async def scenario():
         session = make_session()
         await session.manage_start_message(
@@ -236,16 +239,16 @@ def test_parse_audio_message_uses_little_endian_float32():
                     "type": "start",
                     "chunk_duration_millis": 500,
                     "audio_format": {
-                        "encoding": "pcm_f32le",
+                        "encoding": "pcm_s16le",
                         "sample_rate_hz": 16000,
                         "channels": 1,
                     },
                 }
             )
         )
-        samples = np.array([0.25, -0.5], dtype="<f4")
+        samples = np.array([8192, -16384], dtype="<i2")
         parsed = session._parse_audio_message(samples.tobytes())
-        assert np.array_equal(parsed, np.array([0.25, -0.5], dtype=np.float32))
+        assert np.allclose(parsed, np.array([0.25, -0.5], dtype=np.float32))
 
     asyncio.run(scenario())
 
@@ -259,20 +262,20 @@ def test_request_enqueuer_stops_on_finish_message():
                     "type": "start",
                     "chunk_duration_millis": 500,
                     "audio_format": {
-                        "encoding": "pcm_f32le",
+                        "encoding": "pcm_s16le",
                         "sample_rate_hz": 16000,
                         "channels": 1,
                     },
                 }
             )
         )
-        audio = np.array([0.1, 0.2], dtype=np.float32).tobytes()
+        audio = np.array([3277, 6553], dtype="<i2").tobytes()
         websocket = FakeWebsocket([audio, json.dumps({"type": "finish"})])
 
         await session.request_enqueuer(websocket)
 
         queued = await session.processor_manager.audio_queue.get()
-        assert np.array_equal(queued, np.array([0.1, 0.2], dtype=np.float32))
+        assert np.allclose(queued, np.array([3277 / 32768.0, 6553 / 32768.0], dtype=np.float32))
         assert session.processor_manager.stream_closed_calls == 1
 
     asyncio.run(scenario())
@@ -328,7 +331,8 @@ def test_websocket_start_timeout_uses_chunk_duration_limit():
 
 def test_websocket_max_message_size_grows_with_max_chunk_duration():
     assert websocket_max_message_size_bytes(1.0) == 2**20
-    assert websocket_max_message_size_bytes(20.0) == 1280000
+    assert websocket_max_message_size_bytes(20.0) == 2**20
+    assert websocket_max_message_size_bytes(40.0) == 1280000
 
 
 def test_handle_connection_turns_request_task_protocol_error_into_clean_close():
@@ -391,5 +395,18 @@ def test_handle_connection_times_out_before_allocating_stream_session(monkeypatc
         assert payload["type"] == "error"
         assert payload["code"] == "deadline_exceeded"
         assert "initial start event" in payload["message"]
+
+    asyncio.run(scenario())
+
+
+def test_handle_connection_allows_finish_before_first_audio():
+    async def scenario():
+        server = FakeWebsocketServer()
+        websocket = FakeWebsocket(['{"type":"start"}', json.dumps({"type": "finish"})])
+
+        await server.handle_connection(websocket)
+
+        assert websocket.sent_messages == [(build_completed_event(), True)]
+        assert websocket.closed == (1000, "completed")
 
     asyncio.run(scenario())

@@ -8,11 +8,12 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from swim.transports.websocket.messages import (
-    PCM_FLOAT32_LE,
+    PCM_S16_LE,
     WEBSOCKET_TRANSCRIBE_PATH,
 )
 from tools._audio_client_common import (
@@ -143,13 +144,18 @@ class WebsocketTranscriptionClient:
                 "type": "start",
                 "chunk_duration_millis": self.audio_config.chunk_duration_millis,
                 "audio_format": {
-                    "encoding": PCM_FLOAT32_LE,
+                    "encoding": PCM_S16_LE,
                     "sample_rate_hz": self.audio_config.sample_rate,
                     "channels": self.audio_config.channels,
                 },
             },
             separators=(",", ":"),
         )
+
+    @staticmethod
+    def _encode_audio_chunk(samples) -> bytes:
+        clipped = np.clip(samples, -1.0, 1.0)
+        return bytes(np.rint(clipped * 32767.0).astype("<i2").tobytes())
 
     async def _send_simulated_audio(self, websocket) -> None:
         assert self.options.simulate_filepath is not None
@@ -163,7 +169,7 @@ class WebsocketTranscriptionClient:
         await websocket.send(self._start_message(), text=True)
         for start in range(0, len(normalized_audio), self.audio_config.chunk_size()):
             chunk_samples = normalized_audio[start : start + self.audio_config.chunk_size()]
-            await websocket.send(chunk_samples.tobytes())
+            await websocket.send(self._encode_audio_chunk(chunk_samples))
             await asyncio.sleep(self.audio_config.effective_chunk_duration_seconds)
         await websocket.send(json.dumps({"type": "finish"}), text=True)
 
@@ -172,7 +178,7 @@ class WebsocketTranscriptionClient:
             await websocket.send(self._start_message(), text=True)
             while True:
                 chunk = await asyncio.to_thread(producer.read_chunk)
-                await websocket.send(chunk.tobytes())
+                await websocket.send(self._encode_audio_chunk(chunk))
 
     async def _send_audio_stream(self, websocket, live_input: LiveInputSettings | None) -> None:
         if self.options.simulate_filepath:

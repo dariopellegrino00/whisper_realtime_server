@@ -22,11 +22,12 @@ from swim.transports.websocket.messages import (
     WebsocketProtocolError,
     build_completed_event,
     build_error_event,
+    parse_finish_message,
 )
 from swim.transports.websocket.session import WebsocketStreamSession
 
 DEFAULT_WEBSOCKET_MAX_SIZE_BYTES = 2**20
-BYTES_PER_SAMPLE = 4
+BYTES_PER_SAMPLE = 2
 
 
 def websocket_start_timeout_seconds(max_chunk_duration_seconds: float) -> float:
@@ -131,6 +132,16 @@ class WebsocketTranscriptionServer:
                     f"{self._first_audio_timeout_seconds(stream_session):.3f}s",
                     code="deadline_exceeded",
                 ) from exc
+
+            if isinstance(first_audio_message, str):
+                parse_finish_message(first_audio_message)
+                stream_logger.info(
+                    "Client closed request stream for %s before sending audio",
+                    stream_id,
+                )
+                await websocket.send(build_completed_event(), text=True)
+                await websocket.close(code=1000, reason="completed")
+                return
 
             await stream_session.consume_initial_audio_message(first_audio_message)
 

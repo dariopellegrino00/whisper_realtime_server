@@ -348,7 +348,7 @@ The first client message must be a JSON `start` event:
   "type": "start",
   "chunk_duration_millis": 500,
   "audio_format": {
-    "encoding": "pcm_f32le",
+    "encoding": "pcm_s16le",
     "sample_rate_hz": 16000,
     "channels": 1
   }
@@ -357,7 +357,7 @@ The first client message must be a JSON `start` event:
 
 After that:
 
-- the client sends binary audio frames containing mono `pcm_f32le` at `16000` Hz
+- the client sends binary audio frames containing mono `pcm_s16le` at `16000` Hz
 - the client closes its send side logically with a JSON `finish` event
 
 Server events are JSON text frames. The main event is `transcript`:

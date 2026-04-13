@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 WEBSOCKET_TRANSCRIBE_PATH = "/v1/transcribe"
-PCM_FLOAT32_LE = "pcm_f32le"
+PCM_S16_LE = "pcm_s16le"
 SAMPLE_RATE_HZ = 16000
 CHANNELS = 1
 
@@ -53,8 +53,8 @@ def parse_start_message(raw_message: str, *, max_chunk_duration_millis: int) -> 
     audio_format = message.get("audio_format")
     if not isinstance(audio_format, dict):
         raise WebsocketProtocolError("audio_format must be an object")
-    if audio_format.get("encoding") != PCM_FLOAT32_LE:
-        raise WebsocketProtocolError("audio_format.encoding must be pcm_f32le")
+    if audio_format.get("encoding") != PCM_S16_LE:
+        raise WebsocketProtocolError("audio_format.encoding must be pcm_s16le")
     if audio_format.get("sample_rate_hz") != SAMPLE_RATE_HZ:
         raise WebsocketProtocolError("audio_format.sample_rate_hz must be 16000")
     if audio_format.get("channels") != CHANNELS:
