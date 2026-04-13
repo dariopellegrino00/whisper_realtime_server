@@ -2,13 +2,16 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Iterable, Optional
 
 import numpy as np
 
-from src.parallel_whisper_online import ParallelOnlineASRProcessor
+from swim.runtime import ParallelOnlineASRProcessor
+
+APP_LOGGER_NAME = "swim"
+DEFAULT_LOG_FOLDER = "server_logs"
 
 
 def _configure_stdout_utf8():
@@ -16,24 +19,40 @@ def _configure_stdout_utf8():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def setup_logging(
-    log_name, use_stdout=False, log_folder="server_logs", level=logging.DEBUG
-):
-    os.makedirs(log_folder, exist_ok=True)
-
-    log_path = os.path.join(
-        log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{log_name}.log"
-    )
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    logger = logging.getLogger(log_name)
-    logger.setLevel(level)
+def _reset_logger_handlers(logger):
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
         handler.flush()
         handler.close()
-    logger.propagate = False
+
+
+def build_logger_name(*parts):
+    return ".".join([APP_LOGGER_NAME, *map(str, parts)])
+
+
+def get_logger(log_name, level=None):
+    logger = logging.getLogger(log_name)
+    if level is not None:
+        logger.setLevel(level)
+    return logger
+
+
+def setup_logging(
+    log_name,
+    use_stdout=False,
+    log_folder=DEFAULT_LOG_FOLDER,
+    level=logging.DEBUG,
+    propagate=False,
+):
+    os.makedirs(log_folder, exist_ok=True)
+
+    filename = log_name.replace(".", "_")
+    log_path = os.path.join(log_folder, f"{datetime.now():%Y%m%d_%H%M%S}_{filename}.log")
+    formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    logger = get_logger(log_name, level=level)
+    logger.setLevel(level)
+    _reset_logger_handlers(logger)
+    logger.propagate = propagate
 
     handlers = [logging.FileHandler(log_path, encoding="utf-8")]
     if use_stdout:
@@ -44,6 +63,38 @@ def setup_logging(
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
+    return logger
+
+
+def setup_application_logging(level=logging.DEBUG, use_stdout=True, log_folder=DEFAULT_LOG_FOLDER):
+    return setup_logging(
+        APP_LOGGER_NAME,
+        use_stdout=use_stdout,
+        log_folder=log_folder,
+        level=level,
+        propagate=False,
+    )
+
+
+def setup_stream_logger(
+    stream_id,
+    *,
+    level=logging.DEBUG,
+    log_every_processor=False,
+    log_folder=DEFAULT_LOG_FOLDER,
+):
+    logger_name = build_logger_name("stream", stream_id)
+    if log_every_processor:
+        return setup_logging(
+            logger_name,
+            log_folder=log_folder,
+            level=level,
+            propagate=True,
+        )
+
+    logger = get_logger(logger_name, level=level)
+    _reset_logger_handlers(logger)
+    logger.propagate = True
     return logger
 
 
@@ -84,10 +135,8 @@ class ProcessorManager:
         self._stream_closed_event = asyncio.Event()
         self._registered = False
 
-    async def insert_audio(
-        self, already_collected_chunks: Optional[Iterable[float]] = None
-    ):
-        audio_batch = []
+    async def insert_audio(self, already_collected_chunks: Iterable[float] | None = None):
+        audio_batch: list[float] = []
         if already_collected_chunks is not None:
             audio_batch.extend(already_collected_chunks)
 
@@ -109,25 +158,24 @@ class ProcessorManager:
         if re_init_processor:
             self.processor.init()
         try:
-            while (
-                self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set()
-            ):
+            while self.audio_queue.qsize() < 2 and not self._stream_closed_event.is_set():
                 await asyncio.sleep(0.001)
 
             await self._shared_asr.register_processor(self.id, self.processor)
             self._registered = True
-            self.server_logger.debug(
-                f"{self.id} accumulated {self.audio_queue.qsize()} queued chunks before registration"
+            self.logger.debug(
+                "%s accumulated %s queued chunks before registration",
+                self.id,
+                self.audio_queue.qsize(),
             )
             yield
-        except Exception as exc:
-            self.server_logger.error(f"Exception in context manager of {self.id}:")
-            self.server_logger.exception(exc)
+        except Exception:
+            self.logger.exception("Processor context failed for %s", self.id)
             raise
         finally:
             if self._registered:
                 await self._shared_asr.unregister_processor(self.id)
-            self.server_logger.debug(f"{self.id} finished processing")
+            self.logger.debug("%s finished processing", self.id)
 
     def is_finished(self):
         return self.processor.timed_out

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import src.parallel_whisper_online as pwo
+import swim.runtime.shared_asr as pwo
 
 
 def _segment(start, end, words, no_speech_prob=0.0):
@@ -185,7 +185,9 @@ def test_warmup_bypasses_vad_so_it_always_runs_one_inference(monkeypatch):
         "load_model",
         lambda self, modelsize=None, cache_dir=None, model_dir=None: dummy_model,
     )
-    monkeypatch.setattr(pwo, "load_audio_chunk", lambda filepath, beg, end: np.zeros(16000, dtype=np.float32))
+    monkeypatch.setattr(
+        pwo, "load_audio_chunk", lambda filepath, beg, end: np.zeros(16000, dtype=np.float32)
+    )
     monkeypatch.setattr(pwo, "get_speech_timestamps", lambda audio, _options: [])
     monkeypatch.setattr(pwo.os.path, "isfile", lambda filepath: True)
 

@@ -7,21 +7,27 @@ import signal
 import sys
 from abc import ABC, abstractmethod
 from concurrent import futures
-from typing import Type
 
 import grpc
 from grpc import StatusCode, aio
 
-from src.generated import speech_pb2_grpc
-from src.parallel_whisper_online import ParallelRealtimeASR, resolve_asr_backend
-from src.server.stream_session import (
-    HypothesisWhispStreamSession,
-    StandardWhispStreamSession,
+from swim.runtime import ParallelRealtimeASR, resolve_asr_backend
+from swim.transports.grpc.generated import speech_pb2_grpc
+from swim.transports.grpc.session import (
+    SpeechStreamSession,
     StreamSession,
 )
-from src.server.stream_utils import ProcessorManager, setup_logging
+from swim.transports.grpc.stream_utils import (
+    ProcessorManager,
+    setup_application_logging,
+    setup_stream_logger,
+)
 
 
+# This base servicer keeps the gRPC transport boundary separate from the shared runtime.
+# The current API uses a single service, but this layer stays useful if we later expose
+# alternative gRPC surfaces, such as a Google STT-compatible adapter, on top of the
+# same stream/session orchestration.
 class BaseSpeechToTextServicer(ABC):
     _service_id = itertools.count()
     log_every_processor = False
@@ -33,7 +39,7 @@ class BaseSpeechToTextServicer(ABC):
         self._kwargs = kwargs
 
     @abstractmethod
-    def StreamSessionType(self) -> Type[StreamSession]:
+    def StreamSessionType(self) -> type[StreamSession]:
         pass
 
     def create_stream_session(self) -> StreamSession:
@@ -58,9 +64,11 @@ class BaseSpeechToTextServicer(ABC):
 
     @classmethod
     def log_setup(cls, stream_id):
-        if cls.log_every_processor:
-            return setup_logging(f"{stream_id}", level=cls._logger_level)
-        return logging.getLogger(__name__)
+        return setup_stream_logger(
+            stream_id,
+            level=cls._logger_level,
+            log_every_processor=cls.log_every_processor,
+        )
 
     @staticmethod
     def _first_audio_timeout_seconds(stream_session):
@@ -70,8 +78,9 @@ class BaseSpeechToTextServicer(ABC):
     async def StreamingRecognize(self, request_iterator, context):
         stream_session = self.create_stream_session()
         stream_id = stream_session.id
+        stream_logger = getattr(stream_session, "logger", self._main_server_logger)
 
-        self._main_server_logger.info(f"Started connection on {stream_id}")
+        stream_logger.info("Started connection on %s", stream_id)
 
         try:
             first_request = await request_iterator.__anext__()
@@ -82,43 +91,35 @@ class BaseSpeechToTextServicer(ABC):
                     timeout=self._first_audio_timeout_seconds(stream_session),
                 )
             except StopAsyncIteration:
-                self._main_server_logger.info(
-                    f"Service {stream_id} closed before sending the first audio chunk"
+                stream_logger.info(
+                    "Service %s closed before sending the first audio chunk", stream_id
                 )
                 return
-            await stream_session.consume_initial_audio_request(
-                first_audio_request, context
-            )
+            await stream_session.consume_initial_audio_request(first_audio_request, context)
         except StopAsyncIteration:
-            self._main_server_logger.info(
-                f"Service {stream_id} closed prematurely by client"
-            )
+            stream_logger.info("Service %s closed prematurely by client", stream_id)
             return
         except asyncio.CancelledError:
-            self._main_server_logger.info(
-                f"RPC cancelled during startup for {stream_id}"
-            )
+            stream_logger.info("RPC cancelled during startup for %s", stream_id)
             raise
         except asyncio.TimeoutError:
             error_message = (
                 f"{stream_id} did not send the first audio chunk within "
                 f"{self._first_audio_timeout_seconds(stream_session):.3f}s"
             )
-            self._main_server_logger.warning(error_message)
+            stream_logger.warning(error_message)
             await context.abort(
                 StatusCode.DEADLINE_EXCEEDED,
                 error_message,
             )
         except grpc.RpcError as exc:
             if exc.code() == StatusCode.CANCELLED:
-                self._main_server_logger.info(
-                    f"Client disconnected from {stream_id} during startup"
-                )
+                stream_logger.info("Client disconnected from %s during startup", stream_id)
             else:
-                self._main_server_logger.exception(f"gRPC error in {stream_id}")
+                stream_logger.exception("gRPC error in %s during startup", stream_id)
             raise
-        except Exception as exc:
-            self._main_server_logger.exception(f"Exception in {stream_id}: {exc}")
+        except Exception:
+            stream_logger.exception("Unhandled exception in %s during startup", stream_id)
             raise
 
         request_task = asyncio.create_task(
@@ -169,18 +170,9 @@ class BaseSpeechToTextServicer(ABC):
                 yield response
 
 
-class StandardWhispSpeechToTextServicer(
-    BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer
-):
-    def StreamSessionType(self) -> Type[StreamSession]:
-        return StandardWhispStreamSession
-
-
-class HypothesisWhispSpeechToTextServicer(
-    BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextWithHypothesisServicer
-):
-    def StreamSessionType(self) -> Type[StreamSession]:
-        return HypothesisWhispStreamSession
+class SpeechToTextServicer(BaseSpeechToTextServicer, speech_pb2_grpc.SpeechToTextServicer):
+    def StreamSessionType(self) -> type[StreamSession]:
+        return SpeechStreamSession
 
 
 async def serve(args):
@@ -193,15 +185,17 @@ async def serve(args):
         sys.exit(1)
     log_level = logging._nameToLevel[log_level_name]
 
-    server_logger = setup_logging("Layer-server", use_stdout=True, level=log_level)
+    app_logger = setup_application_logging(level=log_level, use_stdout=True)
+    server_logger = app_logger.getChild("server")
     BaseSpeechToTextServicer._logger_level = log_level
 
     server_logger.info("Starting server...")
 
     if args.log_every_processor:
         BaseSpeechToTextServicer.log_every_processor = True
-        server_logger.info(
-            "Logging every processor in a separate file, be careful with the number of files generated, this should be used for debugging reasons only"
+        server_logger.warning(
+            "Per-stream file logging enabled. Debug-only: busy or long-running servers "
+            "can keep many log files open and create many files."
         )
 
     if args.qratio_threshold <= 0 or args.qratio_threshold > 100:
@@ -217,6 +211,8 @@ async def serve(args):
         if args.fallback_threshold <= 0:
             server_logger.error("Fallback threshold must be greater than 0")
             sys.exit(1)
+    else:
+        server_logger.info("Fallback logic disabled")
 
     if args.buffer_trimming_sec <= 0:
         server_logger.error("Buffer trimming must be greater than 0")
@@ -236,7 +232,7 @@ async def serve(args):
         modelsize=args.model,
         cache_dir=args.model_cache_dir,
         model_dir=args.model_dir,
-        logger=setup_logging("asr", level=log_level),
+        logger=app_logger.getChild("asr"),
         warmup_file=args.warmup_file,
         use_vad=args.vad,
         backend=args.backend,
@@ -264,13 +260,7 @@ async def serve(args):
     }
 
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(
-        StandardWhispSpeechToTextServicer(shared_asr, server_logger, **processor_args),
-        server,
-    )
-    speech_pb2_grpc.add_SpeechToTextWithHypothesisServicer_to_server(
-        HypothesisWhispSpeechToTextServicer(
-            shared_asr, server_logger, **processor_args
-        ),
+        SpeechToTextServicer(shared_asr, server_logger, **processor_args),
         server,
     )
 
@@ -314,18 +304,21 @@ async def serve(args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Argument parser for the whisper-realtme-server"
+        description="Argument parser for the whisper-realtime-server",
+        allow_abbrev=False,
     )
     parser.add_argument(
-        "--fallback",
-        action="store_true",
-        help="Enable fallback logic when similarity local agreement fails for a mltitude of times",
+        "--no-fallback",
+        dest="fallback",
+        action="store_false",
+        default=True,
+        help="Disable fallback logic when similarity local agreement fails repeatedly",
     )
     parser.add_argument(
         "--fallback-threshold",
         type=int,
         default=1,
-        help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if --fallback is not set)",
+        help="threshold t for fallback logic after t+1 similarity local agreement fails (ignored if fallback is disabled)",
     )
     parser.add_argument(
         "--qratio-threshold",
@@ -356,16 +349,17 @@ def build_parser():
         "--ports",
         type=int,
         nargs="+",
-        default=[50051, 50052],
+        default=[50051],
         help="Ports to run the server on",
     )
-    parser.add_argument(
-        "--max-workers", type=int, default=20, help="Max workers for the server"
-    )
+    parser.add_argument("--max-workers", type=int, default=20, help="Max workers for the server")
     parser.add_argument(
         "--log-every-processor",
         action="store_true",
-        help="Log every processor in a separate file",
+        help=(
+            "Write one log file per stream. Debug-only: busy or long-running servers "
+            "can keep many log files open and create many files."
+        ),
     )
 
     parser.add_argument(

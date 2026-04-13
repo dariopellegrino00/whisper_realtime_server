@@ -28,17 +28,12 @@ message Transcript {
   string text = 3;
 }
 
-message TranscriptWithHypothesis {
+message StreamingRecognizeResponse {
   Transcript confirmed = 1;
-  Transcript hypothesis = 2;
+  Transcript interim = 2;
 }
 
-// Bidirectional streaming without unconfirmed hypothesis 
+// Bidirectional streaming with confirmed transcript updates and optional interim updates.
 service SpeechToText {
-  rpc StreamingRecognize(stream StreamingRecognizeRequest) returns (stream Transcript);
-}
-
-// Bidirectional streaming with unconfirmed hypothesis
-service SpeechToTextWithHypothesis {
-  rpc StreamingRecognize(stream StreamingRecognizeRequest) returns (stream TranscriptWithHypothesis);
+  rpc StreamingRecognize(stream StreamingRecognizeRequest) returns (stream StreamingRecognizeResponse);
 }

@@ -7,14 +7,38 @@ import numpy as np
 import pytest
 from grpc import StatusCode
 
-fake_generated = ModuleType("src.generated")
-fake_speech_pb2 = ModuleType("src.generated.speech_pb2")
-fake_generated.speech_pb2 = fake_speech_pb2
-sys.modules.setdefault("src.generated", fake_generated)
-sys.modules.setdefault("src.generated.speech_pb2", fake_speech_pb2)
+fake_generated = ModuleType("swim.transports.grpc.generated")
+fake_speech_pb2 = ModuleType("swim.transports.grpc.generated.speech_pb2")
+fake_speech_pb2_grpc = ModuleType("swim.transports.grpc.generated.speech_pb2_grpc")
 
-from src.server.stream_session import StandardWhispStreamSession
-from tests.conftest import AsyncIterator
+
+class FakeTranscript:
+    def __init__(self, start_time_millis=0, end_time_millis=0, text=""):
+        self.start_time_millis = start_time_millis
+        self.end_time_millis = end_time_millis
+        self.text = text
+
+
+class FakeStreamingRecognizeResponse:
+    def __init__(self, confirmed=None, interim=None):
+        self.confirmed = confirmed
+        self.interim = interim
+
+    def HasField(self, field_name):
+        return getattr(self, field_name) is not None
+
+
+fake_speech_pb2.Transcript = FakeTranscript
+fake_speech_pb2.StreamingRecognizeResponse = FakeStreamingRecognizeResponse
+fake_speech_pb2_grpc.SpeechToTextServicer = type("SpeechToTextServicer", (), {})
+fake_generated.speech_pb2_grpc = fake_speech_pb2_grpc
+fake_generated.speech_pb2 = fake_speech_pb2
+sys.modules.setdefault("swim.transports.grpc.generated", fake_generated)
+sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2", fake_speech_pb2)
+sys.modules.setdefault("swim.transports.grpc.generated.speech_pb2_grpc", fake_speech_pb2_grpc)
+
+from swim.transports.grpc.session import SpeechStreamSession  # noqa: E402
+from tests.conftest import AsyncIterator  # noqa: E402
 
 
 class AbortCalled(Exception):
@@ -74,7 +98,7 @@ class FakeRequest:
 
 
 def make_session():
-    return StandardWhispStreamSession(FakeProcessorManager())
+    return SpeechStreamSession(FakeProcessorManager())
 
 
 def test_manage_first_message_requires_config():
@@ -114,7 +138,9 @@ def test_consume_initial_audio_request_uses_same_validation():
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500), FakeContext())
         samples = np.array([0.1, 0.2], dtype=np.float32)
-        await session.consume_initial_audio_request(FakeRequest(audio_bytes=samples.tobytes()), FakeContext())
+        await session.consume_initial_audio_request(
+            FakeRequest(audio_bytes=samples.tobytes()), FakeContext()
+        )
         assert len(session.processor_manager.inserted_batches) == 1
         assert np.array_equal(session.processor_manager.inserted_batches[0], samples)
 
@@ -138,10 +164,38 @@ def test_request_enqueuer_logs_when_client_closes_request_stream(caplog):
         session = make_session()
         await session.manage_first_message(FakeRequest(config=500), FakeContext())
 
-        with caplog.at_level(logging.INFO, logger="src.server.stream_session"):
+        with caplog.at_level(logging.INFO, logger="swim.transports.grpc.session"):
             await session.request_enqueuer(AsyncIterator([]), FakeContext())
 
         assert "Client closed request stream for test-stream" in caplog.text
         assert session.processor_manager.stream_closed_calls == 1
 
     asyncio.run(scenario())
+
+
+def test_create_response_emits_confirmed_and_interim_segments():
+    session = make_session()
+    session.processor_manager.processor.results = (0.1, 0.4, "confirmed")
+    session.processor_manager.processor.hypothesis = (0.4, 0.7, "interim")
+
+    responses = session.create_response()
+
+    assert len(responses) == 1
+    response = responses[0]
+    assert response.confirmed.text == "confirmed"
+    assert response.confirmed.start_time_millis == 100
+    assert response.interim.text == "interim"
+    assert response.interim.start_time_millis == 400
+
+
+def test_create_response_emits_interim_without_confirmed():
+    session = make_session()
+    session.processor_manager.processor.results = None
+    session.processor_manager.processor.hypothesis = (0.2, 0.5, "interim")
+
+    responses = session.create_response()
+
+    assert len(responses) == 1
+    response = responses[0]
+    assert not response.HasField("confirmed")
+    assert response.interim.text == "interim"

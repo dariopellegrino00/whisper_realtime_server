@@ -1,0 +1,1 @@
+"""SWIM package."""

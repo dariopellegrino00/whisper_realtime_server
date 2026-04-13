@@ -1,12 +1,6 @@
-"""Unit tests for the HypothesisBuffer in whisper_online.py."""
+"""Unit tests for the hypothesis buffer."""
 
-import sys
-import os
-
-# Ensure the src directory is in the path so we can import whisper_online
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from whisper_online import HypothesisBuffer
+from swim.runtime import HypothesisBuffer
 
 
 def make_words(texts, start=0.0, step=0.5):
@@ -21,8 +15,8 @@ def make_words(texts, start=0.0, step=0.5):
 
 # Basic lifecycle and word insertion tests
 
-class TestBasicLifecycle:
 
+class TestBasicLifecycle:
     def test_insert_basic(self):
         """Verify that words are correctly inserted and the offset is applied."""
         buf = HypothesisBuffer()
@@ -80,8 +74,8 @@ class TestBasicLifecycle:
 
 # Tests for the deduplication logic during insertion
 
-class TestInsertDedup:
 
+class TestInsertDedup:
     def test_insert_dedup_removes_overlap(self):
         """Verify that newly inserted words that overlap with already committed ones are removed."""
         buf = HypothesisBuffer()
@@ -184,8 +178,8 @@ class TestInsertDedup:
 
 # Tests for the word confirmation (flush) logic
 
-class TestFlushConfirmation:
 
+class TestFlushConfirmation:
     def test_flush_partial_match(self):
         """Only confirm the prefix that actually matches the previous iteration."""
         buf = HypothesisBuffer()
@@ -221,8 +215,8 @@ class TestFlushConfirmation:
 
 # Tests for the fallback mechanism when no matches occur for a while
 
-class TestFallbackLogic:
 
+class TestFallbackLogic:
     def test_fallback_triggers_after_threshold(self):
         """Verify that fallback triggers after the configured number of mismatches."""
         buf = HypothesisBuffer(use_fallback=True, fallback_threshold=2)
@@ -324,9 +318,15 @@ class TestFallbackLogic:
         buf2 = HypothesisBuffer(use_fallback=True, fallback_threshold=-5)
         assert buf2.fallback_threshold == 1
 
-    def test_fallback_disabled_by_default(self):
-        """Ensure that the fallback mechanism is inactive unless explicitly enabled."""
-        buf = HypothesisBuffer()  # Defaults to use_fallback=False
+    def test_fallback_enabled_by_default(self):
+        """Ensure that the fallback mechanism is active unless explicitly disabled."""
+        buf = HypothesisBuffer()
+
+        assert buf.use_fallback is True
+
+    def test_fallback_can_be_disabled_explicitly(self):
+        """Programmatic callers should still be able to disable fallback."""
+        buf = HypothesisBuffer(use_fallback=False)
 
         word_sets = [
             ["hello", "world"],
@@ -335,7 +335,7 @@ class TestFallbackLogic:
             ["red", "green"],
             ["cat", "dog"],
         ]
-        for i, words in enumerate(word_sets):
+        for words in word_sets:
             buf.insert(make_words(words), offset=0)
             buf.flush()
 
@@ -344,8 +344,8 @@ class TestFallbackLogic:
 
 # Edge cases and miscellaneous tests
 
-class TestEdgeCases:
 
+class TestEdgeCases:
     def test_empty_insert(self):
         """Verify that inserting an empty list is handled gracefully."""
         buf = HypothesisBuffer()
