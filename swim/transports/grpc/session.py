@@ -8,20 +8,12 @@ from grpc import StatusCode
 from swim.runtime import ParallelOnlineASRProcessor
 from swim.transports.audio_encoding import (
     PCM_F32_LE,
-    PCM_S16_LE,
     bytes_per_sample_for_encoding,
     decode_audio_bytes,
 )
+from swim.transports.grpc.audio_encoding import normalize_proto_audio_encoding
 from swim.transports.grpc.generated import speech_pb2 as whisp_speech
 from swim.transports.grpc.stream_utils import ProcessorManager, TranscriptionManager
-
-AUDIO_ENCODING_UNSPECIFIED = getattr(whisp_speech, "AUDIO_ENCODING_UNSPECIFIED", 0)
-AUDIO_ENCODING_PCM_F32LE = getattr(whisp_speech, "AUDIO_ENCODING_PCM_F32LE", 1)
-AUDIO_ENCODING_PCM_S16LE = getattr(whisp_speech, "AUDIO_ENCODING_PCM_S16LE", 2)
-PROTO_AUDIO_ENCODINGS = {
-    AUDIO_ENCODING_PCM_F32LE: PCM_F32_LE,
-    AUDIO_ENCODING_PCM_S16LE: PCM_S16_LE,
-}
 
 
 class StreamSession(ABC):
@@ -63,15 +55,6 @@ class SpeechStreamSession(StreamSession):
             "interim": TranscriptionManager(),
         }
         self.audio_encoding = PCM_F32_LE
-
-    @staticmethod
-    def _normalize_audio_encoding(encoding):
-        if encoding == AUDIO_ENCODING_UNSPECIFIED:
-            return PCM_F32_LE
-        try:
-            return PROTO_AUDIO_ENCODINGS[encoding]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported audio encoding {encoding!r}") from exc
 
     async def _parse_audio_request(self, request, context):
         if request.WhichOneof("payload") != "audio_chunk":
@@ -133,8 +116,8 @@ class SpeechStreamSession(StreamSession):
             )
 
         try:
-            requested_encoding = self._normalize_audio_encoding(
-                getattr(first_request.config, "encoding", AUDIO_ENCODING_UNSPECIFIED)
+            requested_encoding = normalize_proto_audio_encoding(
+                getattr(first_request.config, "encoding", 0)
             )
         except ValueError:
             await context.abort(

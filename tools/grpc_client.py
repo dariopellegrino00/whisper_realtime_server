@@ -10,11 +10,11 @@ from typing import Any
 import grpc
 
 from swim.transports.audio_encoding import (
-    PCM_F32_LE,
     PCM_S16_LE,
     SUPPORTED_AUDIO_ENCODINGS,
     encode_audio_samples,
 )
+from swim.transports.grpc.audio_encoding import proto_audio_encoding_for
 from swim.transports.grpc.generated import speech_pb2, speech_pb2_grpc
 from tools._audio_client_common import (
     AudioConfig,
@@ -33,10 +33,6 @@ PB2: Any = speech_pb2
 PB2_GRPC: Any = speech_pb2_grpc
 LIVE_PREVIEW_INTERIM_COLOR = "38;5;215"
 ALL_UPDATES_SEPARATOR = "--------------------"
-PROTO_AUDIO_ENCODINGS = {
-    PCM_F32_LE: getattr(PB2, "AUDIO_ENCODING_PCM_F32LE", 1),
-    PCM_S16_LE: getattr(PB2, "AUDIO_ENCODING_PCM_S16LE", 2),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +142,7 @@ class TranscriptionClient:
         return PB2.StreamingRecognizeRequest(
             config=PB2.StreamingConfig(
                 chunk_duration_millis=self.audio_config.chunk_duration_millis,
-                encoding=PROTO_AUDIO_ENCODINGS[self.options.audio_encoding],
+                encoding=proto_audio_encoding_for(self.options.audio_encoding),
             )
         )
 
