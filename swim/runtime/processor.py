@@ -27,7 +27,8 @@ class OnlineASRProcessor:
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
 
     def init(self, offset=None):
-        self.audio_buffer = np.array([], dtype=np.float32)
+        self._audio_chunks = []
+        self._cached_audio_buffer = None
         self.transcript_buffer = HypothesisBuffer(logfile=self.logfile, **self.kwargs)
         self.buffer_time_offset = 0 if offset is None else offset
         self.transcript_buffer.last_commited_time = self.buffer_time_offset
@@ -37,8 +38,25 @@ class OnlineASRProcessor:
         self._last_emitted_update_serial = 0
         self._last_committed_words = []
 
+    @property
+    def audio_buffer(self):
+        if self._cached_audio_buffer is None:
+            if not self._audio_chunks:
+                self._cached_audio_buffer = np.array([], dtype=np.float32)
+            elif len(self._audio_chunks) == 1:
+                self._cached_audio_buffer = self._audio_chunks[0]
+            else:
+                self._cached_audio_buffer = np.concatenate(self._audio_chunks)
+        return self._cached_audio_buffer
+
+    @audio_buffer.setter
+    def audio_buffer(self, value):
+        self._audio_chunks = [value]
+        self._cached_audio_buffer = value
+
     def insert_audio_chunk(self, audio):
-        self.audio_buffer = np.append(self.audio_buffer, audio)
+        self._audio_chunks.append(np.asarray(audio, dtype=np.float32))
+        self._cached_audio_buffer = None
 
     def _current_audio_end(self):
         return self.buffer_time_offset + (len(self.audio_buffer) / self.SAMPLING_RATE)

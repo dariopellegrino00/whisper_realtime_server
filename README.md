@@ -120,6 +120,11 @@ Install all dependencies:
 - `tools/`: manual and test-oriented utilities such as the gRPC and websocket clients.
 - `scripts/`: development scripts, including `proto.py` for protobuf generation and `deps.py` for dependency sync/check.
 
+## Development Workflow
+
+- **CI/CD:** Continuous Integration runs on every Pull Request and on every push to the `main` branch or version tags.
+- **Feature Branches:** To save resources and avoid duplicate runs, pushes to feature branches do not trigger CI until a Pull Request is opened.
+
 ## gRPC client
 
 <details>
